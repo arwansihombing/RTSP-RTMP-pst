@@ -1,0 +1,8 @@
+{
+  "name": "StreamBridge RTSP to RTMP",
+  "description": "Multi-stream zero-transcoding RTSP to YouTube Live RTMP passthrough bridge with FFmpeg process supervision, H.264 probing, and complete Rust implementation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
