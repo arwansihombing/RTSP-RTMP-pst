@@ -4,8 +4,9 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import {
   createApiAuthMiddleware,
-  extractSessionToken,
+  extractAllSessionTokens,
   formatSessionCookie,
+  resolveValidSessionToken,
   SESSION_TTL_MS,
   SessionStore,
   verifyCredentials,
@@ -32,8 +33,8 @@ async function main() {
 
   // Lightweight non-/api session check so login page loads with zero 401 console errors
   app.get('/auth/session', (req, res) => {
-    const token = extractSessionToken(req);
-    if (sessions.isValid(token)) {
+    const token = resolveValidSessionToken(req, sessions);
+    if (token) {
       res.json({ authenticated: true, username: 'admin' });
     } else {
       res.json({ authenticated: false });
@@ -54,15 +55,16 @@ async function main() {
       'Set-Cookie',
       formatSessionCookie(req, token, Math.floor(SESSION_TTL_MS / 1000)),
     );
-    res.json({ ok: true, username: 'admin' });
+    res.json({ ok: true, username: 'admin', token });
   });
 
-  // All /api/* routes except POST /api/login require a valid session cookie
+  // All /api/* routes except POST /api/login require a valid session cookie or Bearer token
   app.use('/api', createApiAuthMiddleware(sessions));
 
   app.post('/api/logout', (req, res) => {
-    const token = extractSessionToken(req);
-    sessions.deleteSession(token);
+    for (const token of extractAllSessionTokens(req)) {
+      sessions.deleteSession(token);
+    }
     res.setHeader('Set-Cookie', formatSessionCookie(req, '', 0));
     res.json({ ok: true });
   });

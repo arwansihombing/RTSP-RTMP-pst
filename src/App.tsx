@@ -22,6 +22,7 @@ import { SpecView } from './components/SpecView';
 import { StatusBadge } from './components/StatusBadge';
 import { StreamModal } from './components/StreamModal';
 import type { BandwidthSnapshot, StreamItem, StreamStatus } from './types';
+import { apiFetch, setAuthToken } from './utils/authFetch';
 import {
   formatBitrate,
   formatBytes,
@@ -69,11 +70,13 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    fetch('/auth/session')
+    apiFetch('/auth/session')
       .then((res) => res.json())
       .then((data) => {
         if (!active) return;
-        setAuthenticated(Boolean(data?.authenticated));
+        const ok = Boolean(data?.authenticated);
+        if (!ok) setAuthToken(null);
+        setAuthenticated(ok);
       })
       .catch(() => {
         if (!active) return;
@@ -89,7 +92,7 @@ export default function App() {
 
   const fetchStreams = useCallback(async (isInitial = false) => {
     try {
-      const res = await fetch('/api/streams');
+      const res = await apiFetch('/api/streams');
       if (res.status === 401) {
         setAuthenticated(false);
         return;
@@ -113,7 +116,7 @@ export default function App() {
 
   const fetchBandwidth = useCallback(async () => {
     try {
-      const res = await fetch('/api/bandwidth');
+      const res = await apiFetch('/api/bandwidth');
       if (res.status === 401) {
         setAuthenticated(false);
         return;
@@ -199,9 +202,9 @@ export default function App() {
   async function handleStart(stream: StreamItem) {
     setRowBusy(stream.id, true);
     try {
-      const res = await fetch(`/api/streams/${stream.id}/start`, {
+      const res = await apiFetch(`/api/streams/${stream.id}/start`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
       if (res.status === 401) {
@@ -225,9 +228,8 @@ export default function App() {
   async function handleStop(stream: StreamItem) {
     setRowBusy(stream.id, true);
     try {
-      const res = await fetch(`/api/streams/${stream.id}/stop`, {
+      const res = await apiFetch(`/api/streams/${stream.id}/stop`, {
         method: 'POST',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
       });
       if (res.status === 401) {
         setAuthenticated(false);
@@ -250,9 +252,8 @@ export default function App() {
   async function handleProbe(stream: StreamItem) {
     setRowBusy(stream.id, true);
     try {
-      const res = await fetch(`/api/streams/${stream.id}/probe`, {
+      const res = await apiFetch(`/api/streams/${stream.id}/probe`, {
         method: 'POST',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
       });
       if (res.status === 401) {
         setAuthenticated(false);
@@ -275,9 +276,8 @@ export default function App() {
     if (!deletingStream) return;
     setDeletingBusy(true);
     try {
-      const res = await fetch(`/api/streams/${deletingStream.id}`, {
+      const res = await apiFetch(`/api/streams/${deletingStream.id}`, {
         method: 'DELETE',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
       });
       if (res.status === 401) {
         setAuthenticated(false);
@@ -300,11 +300,11 @@ export default function App() {
 
   async function handleLogout() {
     try {
-      await fetch('/api/logout', {
+      await apiFetch('/api/logout', {
         method: 'POST',
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
       });
     } finally {
+      setAuthToken(null);
       setStreams([]);
       setAuthenticated(false);
     }
@@ -779,6 +779,7 @@ export default function App() {
           setStreamModalOpen(false);
           setEditingStream(null);
         }}
+        onUnauthorized={() => setAuthenticated(false)}
         onSaved={(message) => {
           setStreamModalOpen(false);
           setEditingStream(null);
@@ -790,6 +791,7 @@ export default function App() {
       <LogsModal
         stream={logsStream}
         onClose={() => setLogsStream(null)}
+        onUnauthorized={() => setAuthenticated(false)}
       />
 
       <DeleteModal

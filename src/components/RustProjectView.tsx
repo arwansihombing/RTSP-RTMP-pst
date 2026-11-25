@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Copy, Check, FileCode2 } from 'lucide-react';
 import type { RustFileItem } from '../types';
+import { apiFetch } from '../utils/authFetch';
 
 export function RustProjectView() {
   const [files, setFiles] = useState<RustFileItem[]>([]);
@@ -10,8 +11,8 @@ export function RustProjectView() {
 
   useEffect(() => {
     let mounted = true;
-    fetch('/api/rust-files')
-      .then((res) => res.json())
+    apiFetch('/api/rust-files')
+      .then((res) => (res.ok ? res.json() : { files: [] }))
       .then((data) => {
         if (!mounted) return;
         const list = Array.isArray(data.files) ? (data.files as RustFileItem[]) : [];

@@ -20,7 +20,7 @@ pub const SESSION_COOKIE_NAME: &str = "sb_session";
 pub const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 const ADMIN_USERNAME: &str = "admin";
-const ADMIN_PASSWORD: &str = "smk bisa";
+const ADMIN_PASSWORD: &str = "smkbisa";
 
 #[derive(Clone, Default)]
 pub struct SessionStore {
@@ -66,13 +66,43 @@ pub struct LoginRequest {
     pub password: String,
 }
 
-pub fn extract_session_token(req: &Request<Body>) -> Option<String> {
-    let cookie_header = req.headers().get(header::COOKIE)?.to_str().ok()?;
-    for part in cookie_header.split(';') {
-        if let Some((k, v)) = part.split_once('=') {
-            if k.trim() == SESSION_COOKIE_NAME {
-                return Some(v.trim().to_string());
+pub fn extract_all_session_tokens(req: &Request<Body>) -> Vec<String> {
+    let mut tokens = Vec::new();
+    if let Some(auth_val) = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
+        let trimmed = auth_val.trim();
+        if trimmed.len() > 7 && trimmed[..7].eq_ignore_ascii_case("bearer ") {
+            let tok = trimmed[7..].trim();
+            if !tok.is_empty() {
+                tokens.push(tok.to_string());
             }
+        }
+    }
+    if let Some(cookie_header) = req.headers().get(header::COOKIE).and_then(|v| v.to_str().ok()) {
+        for part in cookie_header.split(';') {
+            if let Some((k, v)) = part.split_once('=') {
+                if k.trim() == SESSION_COOKIE_NAME {
+                    let tok = v.trim().to_string();
+                    if !tok.is_empty() && !tokens.contains(&tok) {
+                        tokens.push(tok);
+                    }
+                }
+            }
+        }
+    }
+    tokens
+}
+
+pub async fn resolve_valid_session_token(
+    store: &SessionStore,
+    req: &Request<Body>,
+) -> Option<String> {
+    for token in extract_all_session_tokens(req) {
+        if store.is_valid(Some(&token)).await {
+            return Some(token);
         }
     }
     None
@@ -88,8 +118,7 @@ pub async fn session_status(
     State(store): State<SessionStore>,
     req: Request<Body>,
 ) -> impl IntoResponse {
-    let token = extract_session_token(&req);
-    let authenticated = store.is_valid(token.as_deref()).await;
+    let authenticated = resolve_valid_session_token(&store, &req).await.is_some();
     Json(json!({ "authenticated": authenticated }))
 }
 
@@ -97,7 +126,7 @@ pub async fn login_handler(
     State(store): State<SessionStore>,
     Json(payload): Json<LoginRequest>,
 ) -> Response {
-    if payload.username != ADMIN_USERNAME || payload.password != ADMIN_PASSWORD {
+    if payload.username.trim() != ADMIN_USERNAME || payload.password != ADMIN_PASSWORD {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "Username atau password salah" })),
@@ -110,14 +139,15 @@ pub async fn login_handler(
     (
         StatusCode::OK,
         [(header::SET_COOKIE, cookie)],
-        Json(json!({ "ok": true, "username": ADMIN_USERNAME })),
+        Json(json!({ "ok": true, "username": ADMIN_USERNAME, "token": token })),
     )
         .into_response()
 }
 
 pub async fn logout_handler(State(store): State<SessionStore>, req: Request<Body>) -> Response {
-    let token = extract_session_token(&req);
-    store.delete_session(token.as_deref()).await;
+    for token in extract_all_session_tokens(&req) {
+        store.delete_session(Some(&token)).await;
+    }
     let cookie = build_session_cookie("", 0);
     (
         StatusCode::OK,
@@ -136,8 +166,7 @@ pub async fn require_auth_middleware(
         return Ok(next.run(req).await);
     }
 
-    let token = extract_session_token(&req);
-    if !store.is_valid(token.as_deref()).await {
+    if resolve_valid_session_token(&store, &req).await.is_none() {
         return Ok((
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "Unauthorized" })),

@@ -5,7 +5,7 @@ export const SESSION_COOKIE_NAME = 'sb_session';
 export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 const ADMIN_USERNAME = 'admin';
-const ADMIN_PASSWORD = 'smk bisa';
+const ADMIN_PASSWORD = 'smkbisa';
 
 function safeEquals(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'utf8');
@@ -81,16 +81,52 @@ export class SessionStore {
   }
 }
 
-export function extractSessionToken(req: Request): string | undefined {
+export function extractBearerToken(req: Request): string | undefined {
+  const auth = req.headers.authorization;
+  if (typeof auth !== 'string') {
+    return undefined;
+  }
+  const match = /^Bearer\s+(.+)$/i.exec(auth.trim());
+  const token = match?.[1]?.trim();
+  return token || undefined;
+}
+
+export function extractAllSessionTokens(req: Request): string[] {
+  const tokens: string[] = [];
+  const bearer = extractBearerToken(req);
+  if (bearer) {
+    tokens.push(bearer);
+  }
   const cookies = parseCookieHeader(req.headers.cookie);
-  return cookies[SESSION_COOKIE_NAME];
+  const cookieToken = cookies[SESSION_COOKIE_NAME];
+  if (cookieToken && !tokens.includes(cookieToken)) {
+    tokens.push(cookieToken);
+  }
+  return tokens;
+}
+
+export function extractSessionToken(req: Request): string | undefined {
+  return extractAllSessionTokens(req)[0];
+}
+
+export function resolveValidSessionToken(req: Request, store: SessionStore): string | undefined {
+  for (const token of extractAllSessionTokens(req)) {
+    if (store.isValid(token)) {
+      return token;
+    }
+  }
+  return undefined;
 }
 
 function isHttpsRequest(req: Request): boolean {
   if (req.secure) return true;
   const proto = req.headers['x-forwarded-proto'];
-  if (typeof proto === 'string') {
-    return proto.split(',')[0].trim().toLowerCase() === 'https';
+  if (typeof proto === 'string' && proto.split(',')[0].trim().toLowerCase() === 'https') {
+    return true;
+  }
+  const origin = req.headers.origin;
+  if (typeof origin === 'string' && origin.trim().toLowerCase().startsWith('https://')) {
+    return true;
   }
   return false;
 }
@@ -113,6 +149,9 @@ export function formatSessionCookie(req: Request, token: string, maxAgeSeconds: 
 }
 
 function hasValidOriginOrHeader(req: Request): boolean {
+  if (extractBearerToken(req)) {
+    return true;
+  }
   if (req.headers['x-requested-with'] === 'XMLHttpRequest') {
     return true;
   }
@@ -136,8 +175,8 @@ export function createApiAuthMiddleware(store: SessionStore) {
       return;
     }
 
-    const token = extractSessionToken(req);
-    if (!store.isValid(token)) {
+    const token = resolveValidSessionToken(req, store);
+    if (!token) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }

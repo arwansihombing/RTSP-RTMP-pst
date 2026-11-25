@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, Copy, RefreshCw, Check } from 'lucide-react';
 import type { StreamItem, StreamLogEntry } from '../types';
+import { apiFetch } from '../utils/authFetch';
 
 interface LogsModalProps {
   stream: StreamItem | null;
   onClose: () => void;
+  onUnauthorized?: () => void;
 }
 
 const LEVEL_STYLES: Record<StreamLogEntry['level'], string> = {
@@ -14,7 +16,7 @@ const LEVEL_STYLES: Record<StreamLogEntry['level'], string> = {
   critical: 'text-red-300 font-semibold',
 };
 
-export function LogsModal({ stream, onClose }: LogsModalProps) {
+export function LogsModal({ stream, onClose, onUnauthorized }: LogsModalProps) {
   const [logs, setLogs] = useState<StreamLogEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -24,7 +26,11 @@ export function LogsModal({ stream, onClose }: LogsModalProps) {
   async function fetchLogs(streamId: string, showSpinner = false) {
     if (showSpinner) setLoading(true);
     try {
-      const res = await fetch(`/api/streams/${streamId}/logs`);
+      const res = await apiFetch(`/api/streams/${streamId}/logs`);
+      if (res.status === 401) {
+        onUnauthorized?.();
+        return;
+      }
       if (res.ok) {
         const data = await res.json();
         setLogs(Array.isArray(data.logs) ? data.logs : []);

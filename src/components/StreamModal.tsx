@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { X, Activity, CheckCircle2, AlertCircle } from 'lucide-react';
 import type { ProbeResult, StreamItem } from '../types';
+import { apiFetch } from '../utils/authFetch';
 import { validateStreamForm } from '../utils/streamFormat';
 
 interface StreamModalProps {
@@ -8,9 +9,16 @@ interface StreamModalProps {
   editingStream: StreamItem | null;
   onClose: () => void;
   onSaved: (message: string) => void;
+  onUnauthorized?: () => void;
 }
 
-export function StreamModal({ open, editingStream, onClose, onSaved }: StreamModalProps) {
+export function StreamModal({
+  open,
+  editingStream,
+  onClose,
+  onSaved,
+  onUnauthorized,
+}: StreamModalProps) {
   const [name, setName] = useState('');
   const [rtspUrl, setRtspUrl] = useState('');
   const [rtmpUrl, setRtmpUrl] = useState('');
@@ -61,11 +69,15 @@ export function StreamModal({ open, editingStream, onClose, onSaved }: StreamMod
 
     setProbeState({ loading: true, result: null, error: null });
     try {
-      const res = await fetch('/api/probe', {
+      const res = await apiFetch('/api/probe', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rtsp_url: trimmed }),
       });
+      if (res.status === 401) {
+        onUnauthorized?.();
+        return;
+      }
       const data = await res.json();
       if (!res.ok) {
         setProbeState({
@@ -124,11 +136,16 @@ export function StreamModal({ open, editingStream, onClose, onSaved }: StreamMod
             auto_start: autoStart,
           };
 
-      const res = await fetch(endpoint, {
+      const res = await apiFetch(endpoint, {
         method,
-        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+
+      if (res.status === 401) {
+        onUnauthorized?.();
+        return;
+      }
 
       const data = await res.json();
       if (!res.ok) {

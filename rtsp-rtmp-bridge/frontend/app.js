@@ -31,9 +31,55 @@ const bwYmax = document.getElementById('bw-ymax');
 const bwYmid = document.getElementById('bw-ymid');
 const bwChart = document.getElementById('bw-chart');
 
+const TOKEN_KEY = 'sb_session_token';
+let memoryToken = null;
 let activeLogsId = null;
 let pollTimer = null;
 let bwTimer = null;
+
+function getAuthToken() {
+  if (memoryToken) return memoryToken;
+  try {
+    const stored = window.sessionStorage.getItem(TOKEN_KEY);
+    if (stored) {
+      memoryToken = stored;
+      return stored;
+    }
+  } catch {
+    // ignore storage restriction
+  }
+  return null;
+}
+
+function setAuthToken(token) {
+  memoryToken = token || null;
+  try {
+    if (token) {
+      window.sessionStorage.setItem(TOKEN_KEY, token);
+    } else {
+      window.sessionStorage.removeItem(TOKEN_KEY);
+    }
+  } catch {
+    // ignore storage restriction
+  }
+}
+
+async function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const token = getAuthToken();
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  const res = await fetch(url, {
+    ...options,
+    headers,
+    credentials: 'same-origin',
+  });
+  if (res.status === 401 && url !== '/api/login') {
+    setAuthToken(null);
+  }
+  return res;
+}
 
 function showLogin() {
   if (pollTimer) {
@@ -72,11 +118,12 @@ function showDashboard() {
 
 async function checkAuth() {
   try {
-    const res = await fetch('/auth/session');
+    const res = await apiFetch('/auth/session');
     const data = await res.json();
     if (data && data.authenticated) {
       showDashboard();
     } else {
+      setAuthToken(null);
       showLogin();
     }
   } catch {
@@ -187,7 +234,7 @@ function renderBandwidthChart(history) {
 
 async function loadBandwidth() {
   try {
-    const res = await fetch('/api/bandwidth');
+    const res = await apiFetch('/api/bandwidth');
     if (res.status === 401) {
       showLogin();
       return;
@@ -212,7 +259,7 @@ async function loadBandwidth() {
 
 async function loadStreams() {
   try {
-    const res = await fetch('/api/streams');
+    const res = await apiFetch('/api/streams');
     if (res.status === 401) {
       showLogin();
       return;
@@ -317,7 +364,7 @@ function renderStreams(streams) {
     tdActions.appendChild(
       makeActionButton('Delete', 'px-2.5 py-1 text-xs border border-slate-300 text-red-700 rounded', async () => {
         if (!window.confirm(`Delete stream "${s.name}"?`)) return;
-        const res = await fetch(`/api/streams/${s.id}`, { method: 'DELETE' });
+        const res = await apiFetch(`/api/streams/${s.id}`, { method: 'DELETE' });
         if (res.status === 401) {
           showLogin();
           return;
@@ -335,7 +382,7 @@ function renderStreams(streams) {
 }
 
 async function postAction(url, okMsg) {
-  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  const res = await apiFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   if (res.status === 401) {
     showLogin();
     return;
@@ -376,7 +423,7 @@ async function openLogs(stream) {
 
 async function refreshLogs() {
   if (!activeLogsId) return;
-  const res = await fetch(`/api/streams/${activeLogsId}/logs`);
+  const res = await apiFetch(`/api/streams/${activeLogsId}/logs`);
   if (res.status === 401) {
     showLogin();
     return;
@@ -391,7 +438,7 @@ async function refreshLogs() {
 loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   loginError.classList.add('hidden');
-  const res = await fetch('/api/login', {
+  const res = await apiFetch('/api/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -401,16 +448,21 @@ loginForm.addEventListener('submit', async (e) => {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    setAuthToken(null);
     loginError.textContent = data.error || 'Login gagal';
     loginError.classList.remove('hidden');
     return;
+  }
+  if (data.token) {
+    setAuthToken(data.token);
   }
   loginPassword.value = '';
   showDashboard();
 });
 
 document.getElementById('btn-logout').addEventListener('click', async () => {
-  await fetch('/api/logout', { method: 'POST' });
+  await apiFetch('/api/logout', { method: 'POST' });
+  setAuthToken(null);
   showLogin();
 });
 
@@ -442,7 +494,7 @@ streamForm.addEventListener('submit', async (e) => {
   }
 
   const id = fieldId.value;
-  const res = await fetch(id ? `/api/streams/${id}` : '/api/streams', {
+  const res = await apiFetch(id ? `/api/streams/${id}` : '/api/streams', {
     method: id ? 'PATCH' : 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, rtsp_url: rtsp, rtmp_url: rtmp }),

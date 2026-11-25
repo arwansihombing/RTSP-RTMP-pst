@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Lock, AlertCircle } from 'lucide-react';
+import { apiFetch, setAuthToken } from '../utils/authFetch';
 
 interface LoginViewProps {
   onLoginSuccess: () => void;
@@ -22,19 +23,30 @@ export function LoginView({ onLoginSuccess }: LoginViewProps) {
 
     setSubmitting(true);
     try {
-      const res = await fetch('/api/login', {
+      const res = await apiFetch('/api/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Requested-With': 'XMLHttpRequest',
         },
         body: JSON.stringify({ username: username.trim(), password }),
       });
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        setAuthToken(null);
         setError(data.error || 'Login gagal. Periksa username dan password.');
-        setSubmitting(false);
+        return;
+      }
+
+      if (typeof data.token === 'string' && data.token) {
+        setAuthToken(data.token);
+      }
+
+      const verifyRes = await apiFetch('/auth/session');
+      const verifyData = await verifyRes.json().catch(() => ({}));
+      if (!verifyRes.ok || !verifyData?.authenticated) {
+        setAuthToken(null);
+        setError('Sesi login tidak tersimpan oleh browser atau proxy. Coba muat ulang halaman.');
         return;
       }
 
