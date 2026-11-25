@@ -427,12 +427,12 @@ Isi kolom sesuai tabel berikut:
 | **Node.js runtime** | `v22.x` atau `v24.x` (misal `v24.22.3` — wajib ≥ `v22.5` untuk `node:sqlite`) |
 | **Pkg Manager** | `npm` atau `yarn` |
 | **Install dependencies** | Centang jika `node_modules` belum di-install |
-| **Start command** | Pilih **Custom command**: `npm run build && npm start` *(atau pilih **From package.json** → `start` jika sudah di-build)* |
-| **Project Port** | `3000` |
+| **Start command** | Pilih **From package.json** → `start` *(jika `dist/` sudah di-build)* atau **Custom command**: `npm run build && npm start` *(jika port `3000` sudah dipakai project lain, pakai `npm run build && npm start -- --port 3005`)* |
+| **Project Port** | `3000` *(atau samakan dengan port di `--port`, misal `3005`)* |
 | **Project Remark** | Kosongkan atau `StreamBridge RTSP-RTMP` |
 | **Domain name** | **Kosongkan** jika Reverse Proxy sudah diatur terpisah di Website/Nginx aaPanel |
 
-Setelah status **Running**, arahkan Reverse Proxy domain Anda di aaPanel ke `http://127.0.0.1:3000`.
+Setelah status **Running**, arahkan Reverse Proxy domain Anda di aaPanel ke `http://127.0.0.1:3000` (atau port yang Anda pilih, misal `http://127.0.0.1:3005`).
 
 ---
 

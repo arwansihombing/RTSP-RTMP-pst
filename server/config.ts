@@ -12,9 +12,27 @@ export interface AppConfig {
   rustLog: string;
 }
 
-export function loadConfig(): AppConfig {
+export function resolvePort(argv: readonly string[] = process.argv.slice(2)): number {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg.startsWith('--port=')) {
+      const parsed = Number.parseInt(arg.slice('--port='.length), 10);
+      if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) {
+        return parsed;
+      }
+    } else if ((arg === '--port' || arg === '-p') && i + 1 < argv.length) {
+      const parsed = Number.parseInt(argv[i + 1], 10);
+      if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535) {
+        return parsed;
+      }
+    }
+  }
+  return PORT;
+}
+
+export function loadConfig(argv: readonly string[] = process.argv.slice(2)): AppConfig {
   return {
-    port: PORT,
+    port: resolvePort(argv),
     dbPath: DB_PATH,
     ffmpegPath: FFMPEG_PATH,
     ffprobePath: FFPROBE_PATH,
