@@ -88,7 +88,7 @@ Aplikasi dirancang **zero-config** dan **tidak membaca environment variable** at
 
 ### Kredensial & Keamanan Sesi Login
 - **Username:** `admin`
-- **Password:** `smkbisa!!*&`
+- **Password:** `smk bisa`
 - **Mekanisme Session:**
   - `POST /api/login` memverifikasi username & password menggunakan perbandingan constant-time (`timingSafeEqual`), lalu menyimpan token UUID acak di `SessionStore` (in-memory `Map`) dengan masa berlaku **24 jam**.
   - Cookie `sb_session` diset sebagai `HttpOnly` (`SameSite=Lax` di HTTP lokal, atau `SameSite=None; Secure; Partitioned` saat diakses lewat reverse proxy HTTPS).
@@ -458,7 +458,7 @@ Binary tunggal akan dihasilkan di `rtsp-rtmp-bridge/target/release/rtsp-rtmp-bri
 ```bash
 ./target/release/rtsp-rtmp-bridge
 ```
-Server langsung listen di `0.0.0.0:3000`, membuat `./data.db` secara otomatis, dan melayani UI HTML + JS bawaan (termasuk login `admin` / `smkbisa!!*&` dan monitoring bandwidth live). Di aaPanel, binary ini bisa dijalankan sebagai daemon lewat **App Store → Supervisor**.
+Server langsung listen di `0.0.0.0:3000`, membuat `./data.db` secara otomatis, dan melayani UI HTML + JS bawaan (termasuk login `admin` / `smk bisa` dan monitoring bandwidth live). Di aaPanel, binary ini bisa dijalankan sebagai daemon lewat **App Store → Supervisor**.
 
 ---
 

@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { parseCookieHeader, SESSION_TTL_MS, SessionStore, verifyCredentials } from './auth';
 
 test('verifyCredentials accepts exact admin credentials and rejects others', () => {
-  assert.equal(verifyCredentials('admin', 'smkbisa!!*&'), true);
+  assert.equal(verifyCredentials('admin', 'smk bisa'), true);
+  assert.equal(verifyCredentials('admin', 'smkbisa!!*&'), false);
   assert.equal(verifyCredentials('admin', 'wrong'), false);
-  assert.equal(verifyCredentials('root', 'smkbisa!!*&'), false);
+  assert.equal(verifyCredentials('root', 'smk bisa'), false);
 });
 
 test('SessionStore creates, validates, expires after 24h, and deletes tokens', () => {

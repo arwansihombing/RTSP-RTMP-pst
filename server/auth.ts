@@ -5,7 +5,7 @@ export const SESSION_COOKIE_NAME = 'sb_session';
 export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 const ADMIN_USERNAME = 'admin';
-const ADMIN_PASSWORD = 'smkbisa!!*&';
+const ADMIN_PASSWORD = 'smk bisa';
 
 function safeEquals(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'utf8');
