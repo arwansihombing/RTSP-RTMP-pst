@@ -58,6 +58,8 @@ export function buildFfmpegArgs(rtspUrl: string, rtmpUrl: string): string[] {
     'warning',
     '-rtsp_transport',
     'tcp',
+    '-use_wallclock_as_timestamps',
+    '1',
     '-fflags',
     '+genpts',
     '-i',
@@ -67,6 +69,8 @@ export function buildFfmpegArgs(rtspUrl: string, rtmpUrl: string): string[] {
     '-c:v',
     'copy',
     '-an',
+    '-avoid_negative_ts',
+    'make_zero',
     '-f',
     'flv',
     '-flvflags',
@@ -130,11 +134,11 @@ export function classifyFfmpegStderr(line: string): ClassifiedStderr {
     };
   }
 
-  if (lower.includes('non-monotonous dts')) {
+  if (lower.includes('non-monotonous dts') || lower.includes('timestamps are unset')) {
     return {
       severity: 'warn',
       shouldRestart: false,
-      summary: 'Non-monotonous DTS warning (handled via -fflags +genpts)',
+      summary: 'Timestamp warning from DVR stream (normalized via wallclock/genpts)',
     };
   }
 

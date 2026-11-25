@@ -44,6 +44,8 @@ pub fn build_ffmpeg_args(rtsp_url: &str, rtmp_url: &str) -> Result<Vec<String>, 
         "warning".to_string(),
         "-rtsp_transport".to_string(),
         "tcp".to_string(),
+        "-use_wallclock_as_timestamps".to_string(),
+        "1".to_string(),
         "-fflags".to_string(),
         "+genpts".to_string(),
         "-i".to_string(),
@@ -53,6 +55,8 @@ pub fn build_ffmpeg_args(rtsp_url: &str, rtmp_url: &str) -> Result<Vec<String>, 
         "-c:v".to_string(),
         "copy".to_string(),
         "-an".to_string(),
+        "-avoid_negative_ts".to_string(),
+        "make_zero".to_string(),
         "-f".to_string(),
         "flv".to_string(),
         "-flvflags".to_string(),
@@ -107,7 +111,7 @@ pub fn classify_stderr_line(line: &str) -> StderrSeverity {
     let lower = line.to_lowercase();
     if line.contains("Stream map '0:a' matches no streams") || lower.contains("matches no streams") {
         StderrSeverity::Critical
-    } else if lower.contains("non-monotonous dts") {
+    } else if lower.contains("non-monotonous dts") || lower.contains("timestamps are unset") {
         StderrSeverity::Warn
     } else if lower.contains("connection refused")
         || lower.contains("timed out")

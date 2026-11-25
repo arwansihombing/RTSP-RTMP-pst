@@ -116,11 +116,13 @@ Untuk setiap kamera, supervisor menjalankan argumen persis berikut (ditambah `-p
 ```bash
 ffmpeg -hide_banner -loglevel warning \
   -rtsp_transport tcp \
+  -use_wallclock_as_timestamps 1 \
   -fflags +genpts \
   -i "{RTSP_URL}" \
   -map 0:v:0 \
   -c:v copy \
   -an \
+  -avoid_negative_ts make_zero \
   -f flv \
   -flvflags no_duration_filesize \
   -progress pipe:1 \
@@ -130,10 +132,12 @@ ffmpeg -hide_banner -loglevel warning \
 | Flag | Fungsi |
 | :--- | :--- |
 | `-rtsp_transport tcp` | Memaksa koneksi RTSP melalui TCP agar tidak mudah corrupt/putus di jaringan DVR. |
+| `-use_wallclock_as_timestamps 1` | Mengisi timestamp wallclock pada paket RTSP DVR yang PTS/DTS awalnya kosong agar muxer FLV tidak memunculkan warning unset timestamps. |
 | `-fflags +genpts` | Membuat ulang timestamp PTS untuk mengatasi timestamp DVR CCTV yang sering kacau. |
 | `-map 0:v:0` | Mengambil **hanya stream video pertama**. Mencegah crash jika DVR tidak mengirim track audio. |
 | `-c:v copy` | Passthrough bitstream H.264 langsung tanpa decode/encode ulang (beban CPU sangat rendah). |
 | `-an` | Menegaskan output tanpa audio (`no audio`) agar kompatibel dengan muxer FLV untuk DVR tanpa mikrofon. |
+| `-avoid_negative_ts make_zero` | Menggeser timestamp FLV awal agar dimulai dari 0 secara bersih untuk YouTube Live RTMP. |
 | `-f flv -flvflags no_duration_filesize` | Format FLV live streaming yang sesuai untuk ingest RTMP YouTube Live. |
 | `-progress pipe:1` | Mengalirkan statistik telemetry (`bitrate`, `total_size`, `fps`) ke `stdout` untuk monitor bandwidth real-time. |
 

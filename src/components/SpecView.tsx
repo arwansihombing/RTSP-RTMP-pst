@@ -1,21 +1,25 @@
 export function SpecView() {
   const ffmpegCommand = `ffmpeg -hide_banner -loglevel warning \\
   -rtsp_transport tcp \\
+  -use_wallclock_as_timestamps 1 \\
   -fflags +genpts \\
   -i "{RTSP_URL}" \\
   -map 0:v:0 \\
   -c:v copy \\
   -an \\
+  -avoid_negative_ts make_zero \\
   -f flv \\
   -flvflags no_duration_filesize \\
   "{RTMP_URL}"`;
 
   const flagRows = [
     { flag: '-rtsp_transport tcp', role: 'Enforces reliable TCP interleaved RTSP transport over unstable DVR LAN links' },
+    { flag: '-use_wallclock_as_timestamps 1', role: 'Assigns monotonic wallclock timestamps to RTSP DVR packets missing initial PTS/DTS' },
     { flag: '-fflags +genpts', role: 'Regenerates presentation timestamps when CCTV DVR streams emit non-monotonous DTS' },
     { flag: '-map 0:v:0', role: 'Selects exclusively the first video track so missing audio streams never crash FFmpeg' },
     { flag: '-c:v copy', role: 'Zero-transcoding H.264 bitstream passthrough (<5% CPU per camera process)' },
     { flag: '-an', role: 'Explicitly disables audio muxing for audio-less CCTV DVR feeds' },
+    { flag: '-avoid_negative_ts make_zero', role: 'Shifts initial FLV timestamps to start cleanly at zero for YouTube RTMP ingest' },
     { flag: '-f flv -flvflags no_duration_filesize', role: 'Live RTMP FLV muxing compatible with YouTube Live ingest endpoints' },
   ];
 

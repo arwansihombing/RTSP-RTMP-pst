@@ -20,6 +20,8 @@ test('buildFfmpegArgs produces exact passthrough flags plus -progress pipe:1 wit
     'warning',
     '-rtsp_transport',
     'tcp',
+    '-use_wallclock_as_timestamps',
+    '1',
     '-fflags',
     '+genpts',
     '-i',
@@ -29,6 +31,8 @@ test('buildFfmpegArgs produces exact passthrough flags plus -progress pipe:1 wit
     '-c:v',
     'copy',
     '-an',
+    '-avoid_negative_ts',
+    'make_zero',
     '-f',
     'flv',
     '-flvflags',
@@ -64,10 +68,14 @@ test('validateStreamUrl rejects invalid schemes and control characters', () => {
   assert.equal(validateStreamUrl('  rtsp://10.0.0.5:554/cam1  ', ['rtsp:']), 'rtsp://10.0.0.5:554/cam1');
 });
 
-test('classifyFfmpegStderr detects DTS warnings, connection errors, and audio map bugs', () => {
+test('classifyFfmpegStderr detects DTS warnings, unset timestamps, connection errors, and audio map bugs', () => {
   const dts = classifyFfmpegStderr('Non-monotonous DTS in output stream 0:0; previous: 100, current: 90');
   assert.equal(dts.severity, 'warn');
   assert.equal(dts.shouldRestart, false);
+
+  const unset = classifyFfmpegStderr('[flv @ 0x123] Timestamps are unset in a packet for stream 0.');
+  assert.equal(unset.severity, 'warn');
+  assert.equal(unset.shouldRestart, false);
 
   const refused = classifyFfmpegStderr('tcp://192.168.1.50:554: Connection refused');
   assert.equal(refused.severity, 'error');
