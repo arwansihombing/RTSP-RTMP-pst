@@ -19,8 +19,9 @@ Repositori ini menyediakan dua implementasi yang sepadan:
 8. [Struktur Folder & Bentuk Antarmuka (UI)](#8-struktur-folder--bentuk-antarmuka-ui)
 9. [Setup Manual Lengkap di VPS Linux (Tanpa Panel / systemd)](#9-setup-manual-lengkap-di-vps-linux-tanpa-panel--systemd)
 10. [Setup di aaPanel (Node.js Project + Reverse Proxy)](#10-setup-di-aapanel-nodejs-project--reverse-proxy)
-11. [Setup Versi Native Rust (`rtsp-rtmp-bridge`)](#11-setup-versi-native-rust-rtsp-rtmp-bridge)
-12. [Pengujian & Troubleshooting](#12-pengujian--troubleshooting)
+11. [Setup dengan Docker & Docker Compose (Direkomendasikan)](#11-setup-dengan-docker--docker-compose-direkomendasikan)
+12. [Setup Versi Native Rust (`rtsp-rtmp-bridge`)](#12-setup-versi-native-rust-rtsp-rtmp-bridge)
+13. [Pengujian & Troubleshooting](#13-pengujian--troubleshooting)
 
 ---
 
@@ -88,9 +89,10 @@ Aplikasi dirancang **zero-config** dan **tidak membaca environment variable** at
 
 ### Kredensial & Keamanan Sesi Login
 - **Username:** `admin`
-- **Password:** `smkbisa`
+- **Password:** `smkbisa!!*&`
 - **Mekanisme Session:**
   - `POST /api/login` memverifikasi username & password menggunakan perbandingan constant-time (`timingSafeEqual`), lalu menyimpan token UUID acak di `SessionStore` (in-memory `Map`) dengan masa berlaku **24 jam**.
+  - **Rate Limiting & Anti-Timing:** Minimal delay 1 detik per percobaan login; 5x gagal dalam 5 menit memblokir IP selama 15 menit (`HTTP 429`).
   - Cookie `sb_session` diset sebagai `HttpOnly` (`SameSite=Lax` di HTTP lokal, atau `SameSite=None; Secure; Partitioned` saat diakses lewat reverse proxy HTTPS).
   - Semua route `/api/*` selain `POST /api/login` wajib membawa cookie session yang valid (jika tidak, dikembalikan `401 Unauthorized`).
   - Route `POST`, `PATCH`, `DELETE` pada `/api/*` memvalidasi origin/header permintaan untuk mencegah CSRF lintas situs.
@@ -125,6 +127,7 @@ ffmpeg -hide_banner -loglevel warning \
   -avoid_negative_ts make_zero \
   -f flv \
   -flvflags no_duration_filesize \
+  -max_interleave_delta 0 \
   -progress pipe:1 \
   "{RTMP_URL}"
 ```
@@ -440,7 +443,32 @@ Setelah status **Running**, arahkan Reverse Proxy domain Anda di aaPanel ke `htt
 
 ---
 
-## 11. Setup Versi Native Rust (`rtsp-rtmp-bridge`)
+## 11. Setup dengan Docker & Docker Compose (Direkomendasikan)
+
+Repositori sudah dilengkapi `Dockerfile` multi-stage (`node:22-bookworm-slim` + `ffmpeg` + `procps` + `tini` + non-root `node` user) dan `docker-compose.yml` untuk produksi.
+
+### Build & Jalankan dengan Docker Compose
+```bash
+docker compose up -d --build
+docker compose logs -f
+```
+Jika port `3000` di host sudah terpakai project lain, ubah mapping port di `docker-compose.yml` menjadi `"3005:3000"` (aplikasi di dalam container tetap berjalan pada port `3000`).
+
+### Build & Jalankan Langsung dengan `docker` CLI
+```bash
+docker build -t streambridge:latest .
+docker run -d \
+  --name streambridge \
+  --restart unless-stopped \
+  -p 3000:3000 \
+  -v streambridge_data:/app/data \
+  streambridge:latest
+```
+Database SQLite (`data.db`) tersimpan persisten di volume `/app/data` (aman saat container di-rebuild atau restart), dan container otomatis menjalankan `auto_start=1` untuk stream aktif setelah boot. Lihat panduan langkah demi langkah lengkap (dari `git push`, install Docker di VPS, build image, Nginx HTTPS, hingga backup) di [`DEPLOY_DOCKER.md`](./DEPLOY_DOCKER.md).
+
+---
+
+## 12. Setup Versi Native Rust (`rtsp-rtmp-bridge`)
 
 Jika Anda ingin menjalankan versi binary Rust murni (tanpa runtime Node.js):
 
@@ -462,11 +490,11 @@ Binary tunggal akan dihasilkan di `rtsp-rtmp-bridge/target/release/rtsp-rtmp-bri
 ```bash
 ./target/release/rtsp-rtmp-bridge
 ```
-Server langsung listen di `0.0.0.0:3000`, membuat `./data.db` secara otomatis, dan melayani UI HTML + JS bawaan (termasuk login `admin` / `smkbisa` dan monitoring bandwidth live). Di aaPanel, binary ini bisa dijalankan sebagai daemon lewat **App Store → Supervisor**.
+Server langsung listen di `0.0.0.0:3000`, membuat `./data.db` secara otomatis, dan melayani UI HTML + JS bawaan (termasuk login `admin` / `smkbisa!!*&` dan monitoring bandwidth live). Di aaPanel, binary ini bisa dijalankan sebagai daemon lewat **App Store → Supervisor**.
 
 ---
 
-## 12. Pengujian & Troubleshooting
+## 13. Pengujian & Troubleshooting
 
 ### Menjalankan Unit Test & Lint (Node.js)
 ```bash

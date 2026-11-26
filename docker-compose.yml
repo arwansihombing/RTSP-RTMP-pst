@@ -1,0 +1,16 @@
+services:
+  streambridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: streambridge:latest
+    container_name: streambridge
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - streambridge_data:/app/data
+    stop_grace_period: 15s
+
+volumes:
+  streambridge_data:

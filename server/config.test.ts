@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DB_PATH, FFMPEG_PATH, FFPROBE_PATH, LOG_LEVEL, PORT, loadConfig, resolvePort } from './config';
+import { DB_PATH, FFMPEG_PATH, FFPROBE_PATH, LOG_LEVEL, PORT, loadConfig, resolveDbPath, resolvePort } from './config';
 
 test('loadConfig returns hardcoded zero-config constants', () => {
   const cfg = loadConfig([]);
@@ -23,4 +23,12 @@ test('resolvePort overrides default 3000 only when valid --port or -p flag is pa
   assert.equal(resolvePort(['-p', '8080']), 8080);
   assert.equal(resolvePort(['--port', 'invalid']), 3000);
   assert.equal(loadConfig(['--port', '3005']).port, 3005);
+});
+
+test('resolveDbPath overrides default ./data.db when --db flag is passed', () => {
+  assert.equal(resolveDbPath([]), './data.db');
+  assert.equal(resolveDbPath(['--db', '/app/data/data.db']), '/app/data/data.db');
+  assert.equal(resolveDbPath(['--db=/var/lib/streambridge/data.db']), '/var/lib/streambridge/data.db');
+  assert.equal(resolveDbPath(['--db', '']), './data.db');
+  assert.equal(loadConfig(['--db', '/app/data/data.db']).dbPath, '/app/data/data.db');
 });

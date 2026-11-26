@@ -3,6 +3,7 @@ export type StderrSeverity = 'info' | 'warn' | 'error' | 'critical';
 export interface ClassifiedStderr {
   severity: StderrSeverity;
   shouldRestart: boolean;
+  fatalNoRetry: boolean;
   summary: string | null;
 }
 
@@ -11,6 +12,40 @@ export interface FfmpegProgressBlock {
   totalSizeBytes: number | null;
   fps: number | null;
 }
+
+export const YOUTUBE_FATAL_RTMP_MESSAGE =
+  'Stream key YouTube ditolak atau sudah dipakai stream lain. Periksa Stream Key di YouTube Studio.';
+
+export const FFMPEG_PASSTHROUGH_FLAGS = {
+  bannerAndLog: ['-hide_banner', '-loglevel', 'warning'] as const,
+  rtspInput: [
+    '-rtsp_transport',
+    'tcp',
+    '-use_wallclock_as_timestamps',
+    '1',
+    '-fflags',
+    '+genpts',
+  ] as const,
+  videoCopyNoAudio: [
+    '-map',
+    '0:v:0',
+    '-c:v',
+    'copy',
+    '-an',
+    '-avoid_negative_ts',
+    'make_zero',
+  ] as const,
+  flvOutput: [
+    '-f',
+    'flv',
+    '-flvflags',
+    'no_duration_filesize',
+    '-max_interleave_delta',
+    '0',
+    '-progress',
+    'pipe:1',
+  ] as const,
+} as const;
 
 const CONTROL_CHAR_PATTERN = /[\r\n\0]/;
 
@@ -53,30 +88,12 @@ export function buildFfmpegArgs(rtspUrl: string, rtmpUrl: string): string[] {
   const safeRtmp = validateStreamUrl(rtmpUrl, ['rtmp:', 'rtmps:']);
 
   return [
-    '-hide_banner',
-    '-loglevel',
-    'warning',
-    '-rtsp_transport',
-    'tcp',
-    '-use_wallclock_as_timestamps',
-    '1',
-    '-fflags',
-    '+genpts',
+    ...FFMPEG_PASSTHROUGH_FLAGS.bannerAndLog,
+    ...FFMPEG_PASSTHROUGH_FLAGS.rtspInput,
     '-i',
     safeRtsp,
-    '-map',
-    '0:v:0',
-    '-c:v',
-    'copy',
-    '-an',
-    '-avoid_negative_ts',
-    'make_zero',
-    '-f',
-    'flv',
-    '-flvflags',
-    'no_duration_filesize',
-    '-progress',
-    'pipe:1',
+    ...FFMPEG_PASSTHROUGH_FLAGS.videoCopyNoAudio,
+    ...FFMPEG_PASSTHROUGH_FLAGS.flvOutput,
     safeRtmp,
   ];
 }
@@ -123,13 +140,36 @@ export function parseFfmpegProgressFields(fields: Record<string, string>): Ffmpe
   return { bitrateKbps, totalSizeBytes, fps };
 }
 
+export function isFatalRtmpStderr(lowerLine: string): boolean {
+  return (
+    lowerLine.includes('netstream.publish.badname') ||
+    lowerLine.includes('netstream.publish.rejected') ||
+    lowerLine.includes('http error 401') ||
+    lowerLine.includes('http error 403') ||
+    lowerLine.includes('server returned 401') ||
+    lowerLine.includes('server returned 403') ||
+    lowerLine.includes('alreadypublishing') ||
+    lowerLine.includes('server error: unauthorized')
+  );
+}
+
 export function classifyFfmpegStderr(line: string): ClassifiedStderr {
   const lower = line.toLowerCase();
+
+  if (isFatalRtmpStderr(lower)) {
+    return {
+      severity: 'error',
+      shouldRestart: false,
+      fatalNoRetry: true,
+      summary: YOUTUBE_FATAL_RTMP_MESSAGE,
+    };
+  }
 
   if (line.includes("Stream map '0:a' matches no streams") || lower.includes('matches no streams')) {
     return {
       severity: 'critical',
       shouldRestart: true,
+      fatalNoRetry: false,
       summary: 'CRITICAL: Audio stream map error detected (expected -an and -map 0:v:0 only)',
     };
   }
@@ -138,6 +178,7 @@ export function classifyFfmpegStderr(line: string): ClassifiedStderr {
     return {
       severity: 'warn',
       shouldRestart: false,
+      fatalNoRetry: false,
       summary: 'Timestamp warning from DVR stream (normalized via wallclock/genpts)',
     };
   }
@@ -155,6 +196,7 @@ export function classifyFfmpegStderr(line: string): ClassifiedStderr {
     return {
       severity: 'error',
       shouldRestart: true,
+      fatalNoRetry: false,
       summary: line.trim(),
     };
   }
@@ -163,6 +205,7 @@ export function classifyFfmpegStderr(line: string): ClassifiedStderr {
     return {
       severity: 'error',
       shouldRestart: false,
+      fatalNoRetry: false,
       summary: line.trim(),
     };
   }
@@ -170,6 +213,7 @@ export function classifyFfmpegStderr(line: string): ClassifiedStderr {
   return {
     severity: 'warn',
     shouldRestart: false,
+    fatalNoRetry: false,
     summary: null,
   };
 }

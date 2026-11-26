@@ -23,7 +23,8 @@ export function StreamModal({
   const [rtspUrl, setRtspUrl] = useState('');
   const [rtmpUrl, setRtmpUrl] = useState('');
   const [skipProbe, setSkipProbe] = useState(false);
-  const [autoStart, setAutoStart] = useState(false);
+  const [startNow, setStartNow] = useState(false);
+  const [autoStartOnBoot, setAutoStartOnBoot] = useState(true);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [probeState, setProbeState] = useState<{
@@ -31,31 +32,35 @@ export function StreamModal({
     result: ProbeResult | null;
     error: string | null;
   }>({ loading: false, result: null, error: null });
-  const [submitting, setSubmitting] = useState(false);
+  const [submitPhase, setSubmitPhase] = useState<'idle' | 'probing' | 'saving'>('idle');
 
   useEffect(() => {
     if (!open) return;
     if (editingStream) {
       setName(editingStream.name);
-      setRtspUrl(editingStream.rtsp_url);
-      setRtmpUrl(editingStream.rtmp_url);
+      setRtspUrl('');
+      setRtmpUrl('');
       setSkipProbe(true);
-      setAutoStart(false);
+      setStartNow(false);
+      setAutoStartOnBoot(editingStream.auto_start);
     } else {
       setName('');
       setRtspUrl('');
       setRtmpUrl('');
       setSkipProbe(false);
-      setAutoStart(false);
+      setStartNow(false);
+      setAutoStartOnBoot(true);
     }
     setErrors({});
     setSubmitError(null);
     setProbeState({ loading: false, result: null, error: null });
+    setSubmitPhase('idle');
   }, [open, editingStream]);
 
   if (!open) return null;
 
   const isEditing = editingStream !== null;
+  const submitting = submitPhase !== 'idle';
 
   async function handleTestProbe() {
     const trimmed = rtspUrl.trim();
@@ -109,6 +114,7 @@ export function StreamModal({
       name,
       rtsp_url: rtspUrl,
       rtmp_url: rtmpUrl,
+      isEditing,
     });
 
     if (Object.keys(validationErrors).length > 0) {
@@ -117,23 +123,49 @@ export function StreamModal({
     }
 
     setErrors({});
-    setSubmitting(true);
 
     try {
+      let cachedProbe: ProbeResult | null = probeState.result?.ok ? probeState.result : null;
+
+      if (!isEditing && !skipProbe && !cachedProbe) {
+        setSubmitPhase('probing');
+        const probeRes = await apiFetch('/api/probe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rtsp_url: rtspUrl.trim() }),
+        });
+        if (probeRes.status === 401) {
+          onUnauthorized?.();
+          return;
+        }
+        const probeData = await probeRes.json();
+        if (!probeRes.ok) {
+          setSubmitError(probeData.error || 'FFprobe RTSP check failed');
+          setSubmitPhase('idle');
+          return;
+        }
+        cachedProbe = probeData.probe ?? null;
+      }
+
+      setSubmitPhase('saving');
       const endpoint = isEditing ? `/api/streams/${editingStream.id}` : '/api/streams';
       const method = isEditing ? 'PATCH' : 'POST';
+
       const payload = isEditing
         ? {
             name: name.trim(),
-            rtsp_url: rtspUrl.trim(),
-            rtmp_url: rtmpUrl.trim(),
+            ...(rtspUrl.trim() ? { rtsp_url: rtspUrl.trim() } : {}),
+            ...(rtmpUrl.trim() ? { rtmp_url: rtmpUrl.trim() } : {}),
+            auto_start: autoStartOnBoot,
           }
         : {
             name: name.trim(),
             rtsp_url: rtspUrl.trim(),
             rtmp_url: rtmpUrl.trim(),
             skip_probe: skipProbe,
-            auto_start: autoStart,
+            start_now: startNow,
+            auto_start: autoStartOnBoot,
+            probe_cache: cachedProbe,
           };
 
       const res = await apiFetch(endpoint, {
@@ -150,7 +182,7 @@ export function StreamModal({
       const data = await res.json();
       if (!res.ok) {
         setSubmitError(data.error || 'Failed to save stream');
-        setSubmitting(false);
+        setSubmitPhase('idle');
         return;
       }
 
@@ -158,9 +190,18 @@ export function StreamModal({
     } catch {
       setSubmitError('Network error while saving stream');
     } finally {
-      setSubmitting(false);
+      setSubmitPhase('idle');
     }
   }
+
+  const submitLabel =
+    submitPhase === 'probing'
+      ? 'Testing RTSP...'
+      : submitPhase === 'saving'
+        ? 'Saving...'
+        : isEditing
+          ? 'Save Changes'
+          : 'Add Stream';
 
   return (
     <div
@@ -215,22 +256,33 @@ export function StreamModal({
               <label htmlFor="stream-rtsp" className="block text-sm font-medium text-slate-700">
                 RTSP Source URL (DVR H.264)
               </label>
-              <button
-                type="button"
-                onClick={handleTestProbe}
-                disabled={probeState.loading}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-700 hover:text-slate-900 disabled:opacity-50"
-              >
-                <Activity className="h-3.5 w-3.5" />
-                {probeState.loading ? 'Probing...' : 'Test FFprobe'}
-              </button>
+              {!isEditing && (
+                <button
+                  type="button"
+                  onClick={handleTestProbe}
+                  disabled={probeState.loading || submitting}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-700 hover:text-slate-900 disabled:opacity-50"
+                >
+                  <Activity className="h-3.5 w-3.5" />
+                  {probeState.loading ? 'Probing...' : 'Test FFprobe'}
+                </button>
+              )}
             </div>
+            {isEditing && editingStream && (
+              <p className="mb-1.5 text-xs font-mono text-slate-500 break-all">
+                Current: {editingStream.rtsp_url_masked}
+              </p>
+            )}
             <input
               id="stream-rtsp"
               type="url"
               value={rtspUrl}
               onChange={(e) => setRtspUrl(e.target.value)}
-              placeholder="rtsp://admin:pass@192.168.1.100:554/Streaming/Channels/101"
+              placeholder={
+                isEditing
+                  ? 'Kosongkan jika RTSP URL / password tidak diubah'
+                  : 'rtsp://admin:pass@192.168.1.100:554/Streaming/Channels/101'
+              }
               className="w-full px-3 py-2 text-sm font-mono text-slate-900 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
             />
             {errors.rtsp_url && <p className="mt-1 text-xs text-red-600">{errors.rtsp_url}</p>}
@@ -259,40 +311,62 @@ export function StreamModal({
             <label htmlFor="stream-rtmp" className="block text-sm font-medium text-slate-700 mb-1">
               RTMP Target URL (YouTube Live Ingest + Stream Key)
             </label>
+            {isEditing && editingStream && (
+              <p className="mb-1.5 text-xs font-mono text-slate-500 break-all">
+                Current: {editingStream.rtmp_url_masked}
+                {editingStream.needs_stream_key ? ' (Perlu isi Stream Key!)' : ''}
+              </p>
+            )}
             <input
               id="stream-rtmp"
               type="url"
               value={rtmpUrl}
               onChange={(e) => setRtmpUrl(e.target.value)}
-              placeholder="rtmp://a.rtmp.youtube.com/live2/xxxx-xxxx-xxxx-xxxx"
+              placeholder={
+                isEditing
+                  ? 'Kosongkan jika tidak diubah (isi URL lengkap untuk ganti Stream Key)'
+                  : 'rtmp://a.rtmp.youtube.com/live2/xxxx-xxxx-xxxx-xxxx'
+              }
               className="w-full px-3 py-2 text-sm font-mono text-slate-900 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
             />
             {errors.rtmp_url && <p className="mt-1 text-xs text-red-600">{errors.rtmp_url}</p>}
           </div>
 
-          {!isEditing && (
-            <div className="pt-1 space-y-2 border-t border-slate-100">
-              <label className="flex items-center gap-2.5 text-sm text-slate-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={skipProbe}
-                  onChange={(e) => setSkipProbe(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
-                />
-                <span>Skip FFprobe pre-check (save offline/LAN camera without probing)</span>
-              </label>
+          <div className="pt-1 space-y-2 border-t border-slate-100">
+            {!isEditing && (
+              <>
+                <label className="flex items-center gap-2.5 text-sm text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={skipProbe}
+                    onChange={(e) => setSkipProbe(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+                  />
+                  <span>Skip FFprobe pre-check (save offline/LAN camera without probing)</span>
+                </label>
 
-              <label className="flex items-center gap-2.5 text-sm text-slate-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={autoStart}
-                  onChange={(e) => setAutoStart(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
-                />
-                <span>Start FFmpeg passthrough immediately after saving</span>
-              </label>
-            </div>
-          )}
+                <label className="flex items-center gap-2.5 text-sm text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={startNow}
+                    onChange={(e) => setStartNow(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+                  />
+                  <span>Start FFmpeg passthrough immediately after saving</span>
+                </label>
+              </>
+            )}
+
+            <label className="flex items-center gap-2.5 text-sm text-slate-700 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoStartOnBoot}
+                onChange={(e) => setAutoStartOnBoot(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+              />
+              <span>Auto-start automatically when server restarts (auto_start=1)</span>
+            </label>
+          </div>
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
             <button
@@ -307,7 +381,7 @@ export function StreamModal({
               disabled={submitting}
               className="px-4 py-2 text-sm font-medium text-white bg-slate-900 rounded-md hover:bg-slate-800 disabled:opacity-50 transition-colors"
             >
-              {submitting ? 'Saving...' : isEditing ? 'Save Changes' : 'Add Stream'}
+              {submitLabel}
             </button>
           </div>
         </form>

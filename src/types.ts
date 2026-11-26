@@ -3,9 +3,11 @@ export type StreamStatus = 'stopped' | 'starting' | 'running' | 'reconnecting' |
 export interface StreamItem {
   id: string;
   name: string;
-  rtsp_url: string;
-  rtmp_url: string;
+  rtsp_url_masked: string;
+  rtmp_url_masked: string;
+  needs_stream_key: boolean;
   enabled: boolean;
+  auto_start: boolean;
   status: StreamStatus;
   pid: number | null;
   uptime_seconds: number;
@@ -14,6 +16,9 @@ export interface StreamItem {
   bitrate_kbps: number;
   bytes_sent: number;
   fps: number | null;
+  last_probe_width: number | null;
+  last_probe_height: number | null;
+  last_probe_fps: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -56,4 +61,21 @@ export interface BandwidthSnapshot {
   active_streams: number;
   interface_count: number;
   history: BandwidthSample[];
+}
+
+export interface FfmpegOsSession {
+  pid: number;
+  ppid: number;
+  elapsed_seconds: number;
+  managed: boolean;
+  stream_id: string | null;
+  stream_name: string | null;
+  streambridge_signature: boolean;
+  command: string;
+}
+
+export interface FfmpegSessionsSnapshot {
+  sessions: FfmpegOsSession[];
+  total_os_ffmpeg: number;
+  orphan_count: number;
 }

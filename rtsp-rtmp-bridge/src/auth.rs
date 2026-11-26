@@ -20,7 +20,7 @@ pub const SESSION_COOKIE_NAME: &str = "sb_session";
 pub const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 const ADMIN_USERNAME: &str = "admin";
-const ADMIN_PASSWORD: &str = "smkbisa";
+const ADMIN_PASSWORD: &str = "smkbisa!!*&";
 
 #[derive(Clone, Default)]
 pub struct SessionStore {

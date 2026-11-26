@@ -30,10 +30,28 @@ export function resolvePort(argv: readonly string[] = process.argv.slice(2)): nu
   return PORT;
 }
 
+export function resolveDbPath(argv: readonly string[] = process.argv.slice(2)): string {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg.startsWith('--db=')) {
+      const value = arg.slice('--db='.length).trim();
+      if (value) {
+        return value;
+      }
+    } else if (arg === '--db' && i + 1 < argv.length) {
+      const value = argv[i + 1].trim();
+      if (value) {
+        return value;
+      }
+    }
+  }
+  return DB_PATH;
+}
+
 export function loadConfig(argv: readonly string[] = process.argv.slice(2)): AppConfig {
   return {
     port: resolvePort(argv),
-    dbPath: DB_PATH,
+    dbPath: resolveDbPath(argv),
     ffmpegPath: FFMPEG_PATH,
     ffprobePath: FFPROBE_PATH,
     rustLog: LOG_LEVEL,

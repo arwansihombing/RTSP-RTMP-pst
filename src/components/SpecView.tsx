@@ -10,6 +10,7 @@ export function SpecView() {
   -avoid_negative_ts make_zero \\
   -f flv \\
   -flvflags no_duration_filesize \\
+  -max_interleave_delta 0 \\
   "{RTMP_URL}"`;
 
   const flagRows = [
@@ -20,7 +21,7 @@ export function SpecView() {
     { flag: '-c:v copy', role: 'Zero-transcoding H.264 bitstream passthrough (<5% CPU per camera process)' },
     { flag: '-an', role: 'Explicitly disables audio muxing for audio-less CCTV DVR feeds' },
     { flag: '-avoid_negative_ts make_zero', role: 'Shifts initial FLV timestamps to start cleanly at zero for YouTube RTMP ingest' },
-    { flag: '-f flv -flvflags no_duration_filesize', role: 'Live RTMP FLV muxing compatible with YouTube Live ingest endpoints' },
+    { flag: '-f flv -flvflags no_duration_filesize -max_interleave_delta 0', role: 'Live RTMP FLV muxing with zero interleave buffer delay for YouTube Live ingest' },
   ];
 
   return (

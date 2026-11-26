@@ -6,6 +6,10 @@ export interface StreamRecord {
   rtsp_url: string;
   rtmp_url: string;
   enabled: number;
+  auto_start: number;
+  last_probe_width: number | null;
+  last_probe_height: number | null;
+  last_probe_fps: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -19,9 +23,11 @@ export interface StreamLogEntry {
 export interface StreamView {
   id: string;
   name: string;
-  rtsp_url: string;
-  rtmp_url: string;
+  rtsp_url_masked: string;
+  rtmp_url_masked: string;
+  needs_stream_key: boolean;
   enabled: boolean;
+  auto_start: boolean;
   status: StreamStatus;
   pid: number | null;
   uptime_seconds: number;
@@ -30,6 +36,9 @@ export interface StreamView {
   bitrate_kbps: number;
   bytes_sent: number;
   fps: number | null;
+  last_probe_width: number | null;
+  last_probe_height: number | null;
+  last_probe_fps: string | null;
   created_at: string;
   updated_at: string;
 }

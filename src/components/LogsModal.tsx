@@ -16,8 +16,11 @@ const LEVEL_STYLES: Record<StreamLogEntry['level'], string> = {
   critical: 'text-red-300 font-semibold',
 };
 
+type LogFilter = 'all' | 'info' | 'warn' | 'error';
+
 export function LogsModal({ stream, onClose, onUnauthorized }: LogsModalProps) {
   const [logs, setLogs] = useState<StreamLogEntry[]>([]);
+  const [levelFilter, setLevelFilter] = useState<LogFilter>('all');
   const [loading, setLoading] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -42,6 +45,7 @@ export function LogsModal({ stream, onClose, onUnauthorized }: LogsModalProps) {
 
   useEffect(() => {
     if (!stream) return;
+    setLevelFilter('all');
     void fetchLogs(stream.id, true);
 
     const timer = setInterval(() => {
@@ -53,16 +57,22 @@ export function LogsModal({ stream, onClose, onUnauthorized }: LogsModalProps) {
     return () => clearInterval(timer);
   }, [stream]);
 
+  const filteredLogs = logs.filter((entry) => {
+    if (levelFilter === 'all') return true;
+    if (levelFilter === 'error') return entry.level === 'error' || entry.level === 'critical';
+    return entry.level === levelFilter;
+  });
+
   useEffect(() => {
     if (autoScroll && preRef.current) {
       preRef.current.scrollTop = preRef.current.scrollHeight;
     }
-  }, [logs, autoScroll]);
+  }, [filteredLogs.length, autoScroll]);
 
   if (!stream) return null;
 
   async function handleCopy() {
-    const text = logs
+    const text = filteredLogs
       .map((l) => `[${l.timestamp}] [${l.level.toUpperCase()}] ${l.message}`)
       .join('\n');
     try {
@@ -74,6 +84,13 @@ export function LogsModal({ stream, onClose, onUnauthorized }: LogsModalProps) {
     }
   }
 
+  const filterButtons: Array<{ id: LogFilter; label: string }> = [
+    { id: 'all', label: 'All' },
+    { id: 'info', label: 'Info' },
+    { id: 'warn', label: 'Warn' },
+    { id: 'error', label: 'Error' },
+  ];
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4"
@@ -82,7 +99,7 @@ export function LogsModal({ stream, onClose, onUnauthorized }: LogsModalProps) {
       aria-labelledby="logs-modal-title"
     >
       <div className="w-full max-w-4xl bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden flex flex-col max-h-[85vh]">
-        <div className="flex items-center justify-between gap-4 px-6 py-4 border-b border-slate-200">
+        <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4 border-b border-slate-200">
           <div className="min-w-0">
             <h2 id="logs-modal-title" className="text-base font-semibold text-slate-900 truncate">
               Process Logs — {stream.name}
@@ -93,8 +110,25 @@ export function LogsModal({ stream, onClose, onUnauthorized }: LogsModalProps) {
             </p>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
-            <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 mr-2 cursor-pointer">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-md" role="group" aria-label="Filter log level">
+              {filterButtons.map((btn) => (
+                <button
+                  key={btn.id}
+                  type="button"
+                  onClick={() => setLevelFilter(btn.id)}
+                  className={`px-2.5 py-1 text-xs font-medium rounded transition-colors ${
+                    levelFilter === btn.id
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {btn.label}
+                </button>
+              ))}
+            </div>
+
+            <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 mx-1 cursor-pointer">
               <input
                 type="checkbox"
                 checked={autoScroll}
@@ -116,7 +150,7 @@ export function LogsModal({ stream, onClose, onUnauthorized }: LogsModalProps) {
             <button
               type="button"
               onClick={handleCopy}
-              disabled={logs.length === 0}
+              disabled={filteredLogs.length === 0}
               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-50"
             >
               {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
@@ -140,9 +174,11 @@ export function LogsModal({ stream, onClose, onUnauthorized }: LogsModalProps) {
         >
           {loading && logs.length === 0
             ? 'Loading FFmpeg stderr buffer...'
-            : logs.length === 0
-              ? 'No log output yet. Start or probe this stream to inspect FFmpeg/FFprobe output.'
-              : logs.map((entry, idx) => (
+            : filteredLogs.length === 0
+              ? logs.length === 0
+                ? 'No log output yet. Start or probe this stream to inspect FFmpeg/FFprobe output.'
+                : `No "${levelFilter}" log lines in buffer.`
+              : filteredLogs.map((entry, idx) => (
                   <div key={`${entry.timestamp}-${idx}`} className={LEVEL_STYLES[entry.level]}>
                     <span className="text-slate-500 select-none mr-2">
                       {entry.timestamp.slice(11, 19)}

@@ -50,14 +50,39 @@ export function maskRtmpUrl(url: string): string {
   }
   const prefix = url.slice(0, idx + 1);
   const key = url.slice(idx + 1);
-  const maskedKey = key.length <= 4 ? '••••' : `${key.slice(0, 4)}••••`;
+  let maskedKey = '****';
+  if (key.length > 4) {
+    const tail = key.slice(-4);
+    const head = key.slice(0, -4);
+    maskedKey = head.includes('-') ? `${head.replace(/[^-]/g, '*')}${tail}` : `****-${tail}`;
+  }
   return truncateMiddle(`${prefix}${maskedKey}`, 38);
+}
+
+export function formatProbeFps(rawFps: string | null): string | null {
+  if (!rawFps) return null;
+  const trimmed = rawFps.trim();
+  if (!trimmed || trimmed === '0/0') return null;
+  if (trimmed.includes('/')) {
+    const [numStr, denStr] = trimmed.split('/');
+    const num = Number(numStr);
+    const den = Number(denStr);
+    if (Number.isFinite(num) && Number.isFinite(den) && den > 0) {
+      const val = num / den;
+      return `${Number.isInteger(val) ? val : val.toFixed(2)} fps`;
+    }
+    return null;
+  }
+  const num = Number(trimmed);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return `${Number.isInteger(num) ? num : num.toFixed(2)} fps`;
 }
 
 export function validateStreamForm(input: {
   name: string;
   rtsp_url: string;
   rtmp_url: string;
+  isEditing?: boolean;
 }): Record<string, string> {
   const errors: Record<string, string> = {};
   if (!input.name.trim()) {
@@ -66,14 +91,18 @@ export function validateStreamForm(input: {
 
   const rtsp = input.rtsp_url.trim();
   if (!rtsp) {
-    errors.rtsp_url = 'RTSP URL is required.';
+    if (!input.isEditing) {
+      errors.rtsp_url = 'RTSP URL is required.';
+    }
   } else if (!/^rtsps?:\/\//i.test(rtsp)) {
     errors.rtsp_url = 'RTSP URL must start with rtsp:// (or rtsps://).';
   }
 
   const rtmp = input.rtmp_url.trim();
   if (!rtmp) {
-    errors.rtmp_url = 'RTMP URL is required.';
+    if (!input.isEditing) {
+      errors.rtmp_url = 'RTMP URL is required.';
+    }
   } else if (!/^rtmps?:\/\//i.test(rtmp)) {
     errors.rtmp_url = 'RTMP URL must start with rtmp:// (or rtmps://).';
   }

@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatBitrate, formatBytes, formatUptime, maskRtmpUrl, validateStreamForm } from './streamFormat';
+import {
+  formatBitrate,
+  formatBytes,
+  formatProbeFps,
+  formatUptime,
+  maskRtmpUrl,
+  validateStreamForm,
+} from './streamFormat';
 
 test('formatUptime formats HH:MM:SS cleanly', () => {
   assert.equal(formatUptime(0), '00:00:00');
@@ -18,13 +25,20 @@ test('formatBitrate and formatBytes format telemetry units cleanly', () => {
   assert.equal(formatBytes(5 * 1024 * 1024), '5.00 MB');
 });
 
-test('maskRtmpUrl masks stream key suffix', () => {
+test('maskRtmpUrl masks stream key leaving only last 4 chars', () => {
   const masked = maskRtmpUrl('rtmp://a.rtmp.youtube.com/live2/abcd-efgh-ijkl');
-  assert.ok(masked.includes('abcd••••'));
-  assert.equal(masked.includes('ijkl'), false);
+  assert.ok(masked.includes('****-****-ijkl'));
+  assert.equal(masked.includes('abcd'), false);
 });
 
-test('validateStreamForm enforces rtsp:// and rtmp:// schemes', () => {
+test('formatProbeFps parses FFprobe fraction and decimal FPS values', () => {
+  assert.equal(formatProbeFps('25/1'), '25 fps');
+  assert.equal(formatProbeFps('30000/1001'), '29.97 fps');
+  assert.equal(formatProbeFps('0/0'), null);
+  assert.equal(formatProbeFps(null), null);
+});
+
+test('validateStreamForm enforces rtsp:// and rtmp:// schemes and allows blank URLs on edit', () => {
   const errs = validateStreamForm({
     name: 'Cam 1',
     rtsp_url: 'http://bad',
@@ -33,6 +47,14 @@ test('validateStreamForm enforces rtsp:// and rtmp:// schemes', () => {
   assert.ok(errs.rtsp_url);
   assert.ok(errs.rtmp_url);
   assert.equal(errs.name, undefined);
+
+  const editOk = validateStreamForm({
+    name: 'Cam 1',
+    rtsp_url: '',
+    rtmp_url: '',
+    isEditing: true,
+  });
+  assert.deepEqual(editOk, {});
 
   const ok = validateStreamForm({
     name: 'Cam 1',

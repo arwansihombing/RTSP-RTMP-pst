@@ -37,6 +37,8 @@ test('buildFfmpegArgs produces exact passthrough flags plus -progress pipe:1 wit
     'flv',
     '-flvflags',
     'no_duration_filesize',
+    '-max_interleave_delta',
+    '0',
     '-progress',
     'pipe:1',
     'rtmp://a.rtmp.youtube.com/live2/xxxx-yyyy',
@@ -68,18 +70,32 @@ test('validateStreamUrl rejects invalid schemes and control characters', () => {
   assert.equal(validateStreamUrl('  rtsp://10.0.0.5:554/cam1  ', ['rtsp:']), 'rtsp://10.0.0.5:554/cam1');
 });
 
-test('classifyFfmpegStderr detects DTS warnings, unset timestamps, connection errors, and audio map bugs', () => {
+test('classifyFfmpegStderr detects DTS warnings, fatal RTMP rejection, connection errors, and audio map bugs', () => {
   const dts = classifyFfmpegStderr('Non-monotonous DTS in output stream 0:0; previous: 100, current: 90');
   assert.equal(dts.severity, 'warn');
   assert.equal(dts.shouldRestart, false);
+  assert.equal(dts.fatalNoRetry, false);
 
   const unset = classifyFfmpegStderr('[flv @ 0x123] Timestamps are unset in a packet for stream 0.');
   assert.equal(unset.severity, 'warn');
   assert.equal(unset.shouldRestart, false);
 
+  const badName = classifyFfmpegStderr('RTMP_SendPacket: NetStream.Publish.BadName');
+  assert.equal(badName.severity, 'error');
+  assert.equal(badName.fatalNoRetry, true);
+  assert.equal(badName.shouldRestart, false);
+  assert.match(badName.summary ?? '', /YouTube Studio/);
+
+  const auth403 = classifyFfmpegStderr('HTTP error 403 Forbidden from server');
+  assert.equal(auth403.fatalNoRetry, true);
+
+  const already = classifyFfmpegStderr('NetStream.Publish.Rejected: AlreadyPublishing');
+  assert.equal(already.fatalNoRetry, true);
+
   const refused = classifyFfmpegStderr('tcp://192.168.1.50:554: Connection refused');
   assert.equal(refused.severity, 'error');
   assert.equal(refused.shouldRestart, true);
+  assert.equal(refused.fatalNoRetry, false);
 
   const audioMap = classifyFfmpegStderr("Stream map '0:a' matches no streams.");
   assert.equal(audioMap.severity, 'critical');

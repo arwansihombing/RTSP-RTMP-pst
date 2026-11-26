@@ -267,8 +267,9 @@ impl StreamManager {
             .await?
             .ok_or(AppError::NotFound)?;
 
+        let all_records = db::list_streams(&self.pool).await?;
         {
-            let guard = self.runtimes.read().await;
+            let mut guard = self.runtimes.write().await;
             if let Some(rt) = guard.get(&id) {
                 if matches!(
                     rt.status,
@@ -277,6 +278,31 @@ impl StreamManager {
                     return self.to_view(record).await;
                 }
             }
+
+            let target_rtmp = record.rtmp_url.trim();
+            for other in &all_records {
+                let Ok(other_id) = Uuid::parse_str(&other.id) else {
+                    continue;
+                };
+                if other_id == id || other.rtmp_url.trim() != target_rtmp {
+                    continue;
+                }
+                if let Some(other_rt) = guard.get(&other_id) {
+                    if matches!(
+                        other_rt.status,
+                        StreamStatus::Running | StreamStatus::Starting | StreamStatus::Reconnecting
+                    ) {
+                        return Err(AppError::BadRequest(format!(
+                            "RTMP target is already in use by active session \"{}\"",
+                            other.name
+                        )));
+                    }
+                }
+            }
+
+            let rt = guard.entry(id).or_default();
+            rt.last_error = None;
+            rt.status = StreamStatus::Starting;
         }
 
         if !skip_probe {

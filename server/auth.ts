@@ -3,9 +3,99 @@ import type { NextFunction, Request, Response } from 'express';
 
 export const SESSION_COOKIE_NAME = 'sb_session';
 export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+export const LOGIN_MAX_FAILURES = 5;
+export const LOGIN_WINDOW_MS = 5 * 60 * 1000;
+export const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+export const LOGIN_MIN_DELAY_MS = 1_000;
 
 const ADMIN_USERNAME = 'admin';
-const ADMIN_PASSWORD = 'smkbisa';
+const ADMIN_PASSWORD = 'smkbisa!!*&';
+
+interface RateLimitEntry {
+  attempts: number;
+  firstAttemptAt: number;
+  lockedUntil: number;
+}
+
+export class LoginRateLimiter {
+  private readonly entries = new Map<string, RateLimitEntry>();
+
+  checkLockout(ip: string, nowMs = Date.now()): { locked: boolean; retryAfterMinutes: number; lockedUntil: number } {
+    const key = ip || 'unknown';
+    const entry = this.entries.get(key);
+    if (!entry) {
+      return { locked: false, retryAfterMinutes: 0, lockedUntil: 0 };
+    }
+    if (entry.lockedUntil > nowMs) {
+      const remainingMs = entry.lockedUntil - nowMs;
+      return {
+        locked: true,
+        retryAfterMinutes: Math.max(1, Math.ceil(remainingMs / 60_000)),
+        lockedUntil: entry.lockedUntil,
+      };
+    }
+    if (entry.lockedUntil > 0 && nowMs >= entry.lockedUntil) {
+      this.entries.delete(key);
+      return { locked: false, retryAfterMinutes: 0, lockedUntil: 0 };
+    }
+    if (nowMs - entry.firstAttemptAt > LOGIN_WINDOW_MS) {
+      this.entries.delete(key);
+    }
+    return { locked: false, retryAfterMinutes: 0, lockedUntil: 0 };
+  }
+
+  recordFailure(ip: string, nowMs = Date.now()): { attempts: number; lockedUntil: number } {
+    if (this.entries.size > 500) {
+      this.prune(nowMs);
+    }
+    const key = ip || 'unknown';
+    const existing = this.entries.get(key);
+    if (!existing || (existing.lockedUntil === 0 && nowMs - existing.firstAttemptAt > LOGIN_WINDOW_MS) || (existing.lockedUntil > 0 && nowMs >= existing.lockedUntil)) {
+      const fresh: RateLimitEntry = {
+        attempts: 1,
+        firstAttemptAt: nowMs,
+        lockedUntil: 0,
+      };
+      this.entries.set(key, fresh);
+      return { attempts: fresh.attempts, lockedUntil: 0 };
+    }
+
+    existing.attempts += 1;
+    if (existing.attempts >= LOGIN_MAX_FAILURES) {
+      existing.lockedUntil = nowMs + LOGIN_LOCKOUT_MS;
+    }
+    return { attempts: existing.attempts, lockedUntil: existing.lockedUntil };
+  }
+
+  recordSuccess(ip: string): void {
+    this.entries.delete(ip || 'unknown');
+  }
+
+  private prune(nowMs: number): void {
+    for (const [key, entry] of this.entries.entries()) {
+      const lockExpired = entry.lockedUntil > 0 && nowMs >= entry.lockedUntil;
+      const windowExpired = entry.lockedUntil === 0 && nowMs - entry.firstAttemptAt > LOGIN_WINDOW_MS;
+      if (lockExpired || windowExpired) {
+        this.entries.delete(key);
+      }
+    }
+  }
+}
+
+export function extractClientIp(req: Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+export async function waitMinDelay(startedAtMs: number, minDelayMs = LOGIN_MIN_DELAY_MS): Promise<void> {
+  const elapsed = Date.now() - startedAtMs;
+  if (elapsed < minDelayMs) {
+    await new Promise((resolve) => setTimeout(resolve, minDelayMs - elapsed));
+  }
+}
 
 function safeEquals(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'utf8');

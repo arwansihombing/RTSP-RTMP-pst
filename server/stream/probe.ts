@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { validateStreamUrl } from './ffmpeg';
+import { maskCommandUrls } from './mask';
 import type { ProbeResult } from './types';
 
 const execFileAsync = promisify(execFile);
@@ -121,7 +122,8 @@ export async function probeRtspStream(
       };
     }
 
-    const detail = (error.stderr || error.message || 'FFprobe connection failed').trim();
+    const rawDetail = (error.stderr || error.message || 'FFprobe connection failed').trim();
+    const detail = maskCommandUrls(rawDetail);
     return {
       ok: false,
       codec_name: null,

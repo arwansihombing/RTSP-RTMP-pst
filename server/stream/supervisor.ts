@@ -1,12 +1,20 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import readline from 'node:readline';
 import { buildFfmpegArgs, classifyFfmpegStderr, parseFfmpegProgressFields } from './ffmpeg';
+import { maskCommandUrls } from './mask';
 import type { StreamLogEntry, StreamStatus } from './types';
 
 export const BACKOFF_STEPS_SECONDS = [3, 5, 10, 30, 60] as const;
 export const MAX_RETRIES = 10;
 export const HEALTHY_UPTIME_RESET_MS = 60_000;
 export const MAX_LOG_LINES = 200;
+export const STALL_TIMEOUT_MS = 30_000;
+export const WATCHDOG_CHECK_INTERVAL_MS = 5_000;
+
+export interface SupervisorOptions {
+  stallTimeoutMs?: number;
+  watchdogIntervalMs?: number;
+}
 
 export function getBackoffSeconds(retryCount: number): number {
   if (retryCount <= 1) {
@@ -33,7 +41,7 @@ export class StreamLogBuffer {
   }
 
   push(level: StreamLogEntry['level'], message: string): void {
-    const trimmed = message.trim();
+    const trimmed = maskCommandUrls(message.trim());
     if (!trimmed) {
       return;
     }
@@ -148,8 +156,10 @@ export async function terminateChildGracefully(child: ChildProcess, timeoutMs = 
         } catch {
           // ignore already-exited process
         }
+        setTimeout(finish, 500).unref();
+      } else {
+        finish();
       }
-      finish();
     }, timeoutMs);
   });
 }
@@ -158,7 +168,10 @@ export async function runSupervisorLoop(
   runtime: StreamRuntimeState,
   ffmpegPath: string,
   getConfig: () => { rtsp_url: string; rtmp_url: string; name: string } | null,
+  options: SupervisorOptions = {},
 ): Promise<void> {
+  const stallTimeoutMs = options.stallTimeoutMs ?? STALL_TIMEOUT_MS;
+  const watchdogIntervalMs = options.watchdogIntervalMs ?? WATCHDOG_CHECK_INTERVAL_MS;
   runtime.retryCount = 0;
 
   while (!runtime.stopRequested) {
@@ -219,6 +232,10 @@ export async function runSupervisorLoop(
     let currentRunBytes = 0;
     let prevProgressBytes = 0;
     let prevProgressTs = spawnTime;
+    let lastObservedBytes = 0;
+    let lastByteAt = spawnTime;
+    let fatalNoRetryError: string | null = null;
+    let stalledRestart = false;
 
     if (child.stdout) {
       const progressRl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
@@ -237,6 +254,10 @@ export async function runSupervisorLoop(
           if (parsed.totalSizeBytes !== null) {
             currentRunBytes = parsed.totalSizeBytes;
             runtime.bytesSent = runtime.bytesSentPriorRuns + currentRunBytes;
+            if (parsed.totalSizeBytes > lastObservedBytes) {
+              lastObservedBytes = parsed.totalSizeBytes;
+              lastByteAt = nowTs;
+            }
           }
 
           if (parsed.bitrateKbps !== null) {
@@ -263,14 +284,38 @@ export async function runSupervisorLoop(
     if (child.stderr) {
       const rl = readline.createInterface({ input: child.stderr, crlfDelay: Infinity });
       rl.on('line', (line) => {
-        const classified = classifyFfmpegStderr(line);
-        runtime.logs.push(classified.severity, line);
-        if (classified.severity === 'critical') {
-          runtime.lastError = classified.summary || line;
+        const sanitized = maskCommandUrls(line);
+        const classified = classifyFfmpegStderr(sanitized);
+        runtime.logs.push(classified.severity, sanitized);
+        if (classified.fatalNoRetry) {
+          fatalNoRetryError = classified.summary || sanitized;
+          runtime.lastError = fatalNoRetryError;
+        } else if (classified.severity === 'critical') {
+          runtime.lastError = classified.summary || sanitized;
         } else if (classified.severity === 'error' && classified.summary) {
           runtime.lastError = classified.summary;
         }
       });
+    }
+
+    const watchdogTimer =
+      stallTimeoutMs > 0
+        ? setInterval(() => {
+            if (runtime.stopRequested || stalledRestart) {
+              return;
+            }
+            if (Date.now() - lastByteAt > stallTimeoutMs) {
+              stalledRestart = true;
+              const stallSec = Math.round(stallTimeoutMs / 1000);
+              const msg = `Stream stall ${stallSec}s, restarting`;
+              runtime.lastError = msg;
+              runtime.logs.push('warn', msg);
+              void terminateChildGracefully(child, 5_000);
+            }
+          }, watchdogIntervalMs)
+        : null;
+    if (watchdogTimer) {
+      watchdogTimer.unref();
     }
 
     const exitResult = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; err?: Error }>(
@@ -283,6 +328,10 @@ export async function runSupervisorLoop(
         });
       },
     );
+
+    if (watchdogTimer) {
+      clearInterval(watchdogTimer);
+    }
 
     runtime.child = null;
     runtime.pid = null;
@@ -299,10 +348,18 @@ export async function runSupervisorLoop(
       break;
     }
 
+    if (fatalNoRetryError !== null) {
+      runtime.status = 'error';
+      runtime.lastError = fatalNoRetryError;
+      runtime.logs.push('error', `${fatalNoRetryError} (auto-retry dihentikan)`);
+      break;
+    }
+
     if (exitResult.err) {
-      runtime.lastError = exitResult.err.message;
-      runtime.logs.push('error', `FFmpeg process error: ${exitResult.err.message}`);
-    } else {
+      const safeErr = maskCommandUrls(exitResult.err.message);
+      runtime.lastError = safeErr;
+      runtime.logs.push('error', `FFmpeg process error: ${safeErr}`);
+    } else if (!stalledRestart) {
       const exitDesc =
         exitResult.code !== null
           ? `exit code ${exitResult.code}`

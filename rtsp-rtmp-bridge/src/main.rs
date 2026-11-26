@@ -11,8 +11,9 @@ use axum::{
     middleware,
     response::Html,
     routing::{get, post},
-    Router,
+    Json, Router,
 };
+use serde_json::json;
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
@@ -46,6 +47,8 @@ async fn main() -> anyhow::Result<()> {
         ));
 
     let app = Router::new()
+        .route("/health", get(|| async { Json(json!({ "ok": true })) }))
+        .route("/healthz", get(|| async { Json(json!({ "ok": true })) }))
         .route("/auth/session", get(session_status).with_state(sessions.clone()))
         .route("/api/login", post(login_handler).with_state(sessions))
         .merge(protected_api)

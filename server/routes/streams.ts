@@ -1,21 +1,105 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Router, type Request, type Response } from 'express';
+import { extractClientIp } from '../auth';
 import type { StreamManager } from '../stream/manager';
 
 function extractErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : 'Unexpected server error';
 }
 
+const RAW_ACCESS_WINDOW_MS = 60_000;
+const RAW_ACCESS_MAX_PER_WINDOW = 10;
+
 export function createStreamsRouter(manager: StreamManager): Router {
   const router = Router();
+  const rawRateMap = new Map<string, { count: number; resetAt: number }>();
+
+  function checkRawRateLimit(ip: string): boolean {
+    const now = Date.now();
+    if (rawRateMap.size > 500) {
+      for (const [key, item] of rawRateMap.entries()) {
+        if (now >= item.resetAt) {
+          rawRateMap.delete(key);
+        }
+      }
+    }
+    const entry = rawRateMap.get(ip);
+    if (!entry || now >= entry.resetAt) {
+      rawRateMap.set(ip, { count: 1, resetAt: now + RAW_ACCESS_WINDOW_MS });
+      return true;
+    }
+    if (entry.count >= RAW_ACCESS_MAX_PER_WINDOW) {
+      return false;
+    }
+    entry.count += 1;
+    return true;
+  }
 
   router.get('/streams', (_req: Request, res: Response) => {
     res.json({ streams: manager.listStreams() });
   });
 
+  router.get('/streams/export', (_req: Request, res: Response) => {
+    res.json(manager.exportStreams());
+  });
+
+  router.post('/streams/import', (req: Request, res: Response) => {
+    try {
+      const items = Array.isArray(req.body) ? req.body : req.body?.streams;
+      const result = manager.importStreams(items);
+      res.status(201).json(result);
+    } catch (err) {
+      res.status(400).json({ error: extractErrorMessage(err) });
+    }
+  });
+
+  router.post('/streams/stop-all', async (_req: Request, res: Response) => {
+    const result = await manager.stopAllManual();
+    res.json({ ok: true, ...result });
+  });
+
+  router.post('/streams/restart-all', async (_req: Request, res: Response) => {
+    const result = await manager.restartAllEnabled(500);
+    res.json({ ok: true, ...result });
+  });
+
+  router.get('/streams/:id', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const wantRaw = req.query.raw === '1' || req.query.raw === 'true';
+    if (wantRaw) {
+      const ip = extractClientIp(req);
+      if (!checkRawRateLimit(ip)) {
+        res.status(429).json({ error: 'Terlalu banyak permintaan detail stream. Coba lagi sebentar.' });
+        return;
+      }
+      const rawStream = manager.getRawStream(id);
+      if (!rawStream) {
+        res.status(404).json({ error: 'Stream not found' });
+        return;
+      }
+      res.json({ stream: rawStream });
+      return;
+    }
+
+    const stream = manager.getStream(id);
+    if (!stream) {
+      res.status(404).json({ error: 'Stream not found' });
+      return;
+    }
+    res.json({ stream });
+  });
+
   router.get('/bandwidth', (_req: Request, res: Response) => {
     res.json(manager.getBandwidthSnapshot());
+  });
+
+  router.get('/sessions', async (_req: Request, res: Response) => {
+    res.json(await manager.listOsFfmpegSessions());
+  });
+
+  router.post('/sessions/cleanup', async (_req: Request, res: Response) => {
+    res.json(await manager.cleanupOrphanFfmpegSessions());
   });
 
   router.post('/probe', async (req: Request, res: Response) => {
@@ -43,7 +127,14 @@ export function createStreamsRouter(manager: StreamManager): Router {
     const rtspUrl = typeof body.rtsp_url === 'string' ? body.rtsp_url : '';
     const rtmpUrl = typeof body.rtmp_url === 'string' ? body.rtmp_url : '';
     const skipProbe = Boolean(body.skip_probe);
-    const autoStart = Boolean(body.auto_start);
+    const startNow =
+      typeof body.start_now === 'boolean' ? body.start_now : Boolean(body.auto_start);
+    const autoStartOnBoot =
+      typeof body.auto_start === 'boolean' && typeof body.start_now === 'boolean'
+        ? body.auto_start
+        : true;
+    const probeCache =
+      body.probe_cache && typeof body.probe_cache === 'object' ? body.probe_cache : null;
 
     if (!name.trim() || !rtspUrl.trim() || !rtmpUrl.trim()) {
       res.status(400).json({ error: 'name, rtsp_url, and rtmp_url are required' });
@@ -56,7 +147,9 @@ export function createStreamsRouter(manager: StreamManager): Router {
         rtsp_url: rtspUrl,
         rtmp_url: rtmpUrl,
         skip_probe: skipProbe,
-        auto_start: autoStart,
+        start_now: startNow,
+        auto_start: autoStartOnBoot,
+        probe_cache: probeCache,
       });
       res.status(201).json(result);
     } catch (err) {
@@ -75,6 +168,7 @@ export function createStreamsRouter(manager: StreamManager): Router {
         rtsp_url: typeof body.rtsp_url === 'string' ? body.rtsp_url : undefined,
         rtmp_url: typeof body.rtmp_url === 'string' ? body.rtmp_url : undefined,
         enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
+        auto_start: typeof body.auto_start === 'boolean' ? body.auto_start : undefined,
       });
 
       if (!updated) {
@@ -115,7 +209,7 @@ export function createStreamsRouter(manager: StreamManager): Router {
 
   router.post('/streams/:id/stop', async (req: Request, res: Response) => {
     const id = String(req.params.id);
-    const stream = await manager.stopStream(id);
+    const stream = await manager.stopStream(id, { persistStopFlag: true });
     if (!stream) {
       res.status(404).json({ error: 'Stream not found' });
       return;

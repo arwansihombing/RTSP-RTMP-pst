@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
   Plus,
   Play,
@@ -12,12 +12,17 @@ import {
   CheckCircle2,
   AlertCircle,
   LogOut,
+  Cpu,
+  RotateCcw,
+  Download,
+  Upload,
 } from 'lucide-react';
 import { BandwidthPanel } from './components/BandwidthPanel';
 import { DeleteModal } from './components/DeleteModal';
 import { LoginView } from './components/LoginView';
 import { LogsModal } from './components/LogsModal';
 import { RustProjectView } from './components/RustProjectView';
+import { SessionsModal } from './components/SessionsModal';
 import { SpecView } from './components/SpecView';
 import { StatusBadge } from './components/StatusBadge';
 import { StreamModal } from './components/StreamModal';
@@ -26,13 +31,22 @@ import { apiFetch, setAuthToken } from './utils/authFetch';
 import {
   formatBitrate,
   formatBytes,
+  formatProbeFps,
   formatUptime,
-  maskRtmpUrl,
   truncateMiddle,
 } from './utils/streamFormat';
 
 type ActiveTab = 'streams' | 'spec' | 'rust';
 type StatusFilter = 'all' | StreamStatus;
+type SortBy = 'created_at' | 'name' | 'status' | 'bandwidth';
+
+const STATUS_SORT_PRIORITY: Record<StreamStatus, number> = {
+  error: 0,
+  reconnecting: 1,
+  starting: 2,
+  running: 3,
+  stopped: 4,
+};
 
 interface ToastMessage {
   id: number;
@@ -51,14 +65,20 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [sortBy, setSortBy] = useState<SortBy>('created_at');
 
   const [streamModalOpen, setStreamModalOpen] = useState(false);
+  const [sessionsModalOpen, setSessionsModalOpen] = useState(false);
   const [editingStream, setEditingStream] = useState<StreamItem | null>(null);
   const [logsStream, setLogsStream] = useState<StreamItem | null>(null);
   const [deletingStream, setDeletingStream] = useState<StreamItem | null>(null);
   const [deletingBusy, setDeletingBusy] = useState(false);
+  const [bulkConfirm, setBulkConfirm] = useState<'stop-all' | 'restart-all' | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [busyIds, setBusyIds] = useState<Record<string, boolean>>({});
+  const [probingIds, setProbingIds] = useState<Record<string, boolean>>({});
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const showToast = useCallback((kind: 'success' | 'error', text: string) => {
     const id = Date.now();
@@ -182,18 +202,32 @@ export default function App() {
 
   const filteredStreams = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return streams.filter((s) => {
+    const list = streams.filter((s) => {
       if (statusFilter !== 'all' && s.status !== statusFilter) {
         return false;
       }
       if (!q) return true;
       return (
         s.name.toLowerCase().includes(q) ||
-        s.rtsp_url.toLowerCase().includes(q) ||
-        s.rtmp_url.toLowerCase().includes(q)
+        s.rtsp_url_masked.toLowerCase().includes(q) ||
+        s.rtmp_url_masked.toLowerCase().includes(q)
       );
     });
-  }, [streams, searchQuery, statusFilter]);
+
+    return [...list].sort((a, b) => {
+      if (sortBy === 'name') {
+        return a.name.localeCompare(b.name);
+      }
+      if (sortBy === 'status') {
+        const diff = STATUS_SORT_PRIORITY[a.status] - STATUS_SORT_PRIORITY[b.status];
+        return diff !== 0 ? diff : a.name.localeCompare(b.name);
+      }
+      if (sortBy === 'bandwidth') {
+        return b.bitrate_kbps - a.bitrate_kbps;
+      }
+      return b.created_at.localeCompare(a.created_at);
+    });
+  }, [streams, searchQuery, statusFilter, sortBy]);
 
   function setRowBusy(id: string, busy: boolean) {
     setBusyIds((prev) => ({ ...prev, [id]: busy }));
@@ -251,6 +285,7 @@ export default function App() {
 
   async function handleProbe(stream: StreamItem) {
     setRowBusy(stream.id, true);
+    setProbingIds((prev) => ({ ...prev, [stream.id]: true }));
     try {
       const res = await apiFetch(`/api/streams/${stream.id}/probe`, {
         method: 'POST',
@@ -264,11 +299,100 @@ export default function App() {
         showToast('error', data.error || `Probe failed for "${stream.name}"`);
       } else {
         showToast('success', data.probe?.message || `H.264 verified for "${stream.name}"`);
+        await fetchStreams(false);
       }
     } catch {
       showToast('error', `Network error probing "${stream.name}"`);
     } finally {
+      setProbingIds((prev) => ({ ...prev, [stream.id]: false }));
       setRowBusy(stream.id, false);
+    }
+  }
+
+  async function handleBulkAction() {
+    if (!bulkConfirm) return;
+    setBulkBusy(true);
+    try {
+      const endpoint = bulkConfirm === 'stop-all' ? '/api/streams/stop-all' : '/api/streams/restart-all';
+      const res = await apiFetch(endpoint, { method: 'POST' });
+      if (res.status === 401) {
+        setAuthenticated(false);
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast('error', data.error || 'Bulk operation failed');
+      } else if (bulkConfirm === 'stop-all') {
+        showToast('success', `Stopped ${data.stopped_count ?? 0} active stream(s)`);
+      } else {
+        showToast('success', `Restarted ${data.restarted_count ?? 0} enabled stream(s)`);
+      }
+      setBulkConfirm(null);
+      await fetchStreams(false);
+    } catch {
+      showToast('error', 'Network error executing bulk stream command');
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function handleExportJson() {
+    try {
+      const res = await apiFetch('/api/streams/export');
+      if (res.status === 401) {
+        setAuthenticated(false);
+        return;
+      }
+      if (!res.ok) {
+        showToast('error', 'Failed to export stream list');
+        return;
+      }
+      const payload = await res.json();
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `streambridge-streams-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast('success', 'Exported stream list JSON (without Stream Keys)');
+    } catch {
+      showToast('error', 'Error exporting streams JSON');
+    }
+  }
+
+  async function handleImportJsonFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const res = await apiFetch('/api/streams/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parsed),
+      });
+      if (res.status === 401) {
+        setAuthenticated(false);
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast('error', data.error || 'Failed to import streams JSON');
+        return;
+      }
+      showToast(
+        'success',
+        `Imported ${data.imported_count ?? 0} stream(s).${
+          data.needs_stream_key_count ? ` ${data.needs_stream_key_count} need RTMP Stream Key re-input.` : ''
+        }`,
+      );
+      await fetchStreams(false);
+    } catch {
+      showToast('error', 'Invalid JSON file selected');
     }
   }
 
@@ -518,38 +642,114 @@ export default function App() {
 
             <BandwidthPanel bandwidth={bandwidth} />
 
-            {/* Filter & Search Toolbar */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-              <div className="relative flex-1 max-w-sm">
-                <Search className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Filter by camera name or URL..."
-                  aria-label="Filter streams"
-                  className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
-                />
+            {/* Filter, Sort & Emergency Controls Toolbar */}
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2 flex-1">
+                  <div className="relative flex-1 min-w-[220px] max-w-sm">
+                    <Search className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="search"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Filter by camera name or URL..."
+                      aria-label="Filter streams"
+                      className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-slate-900 focus:border-slate-900"
+                    />
+                  </div>
+
+                  <select
+                    aria-label="Sort streams"
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as SortBy)}
+                    className="px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  >
+                    <option value="created_at">Sort: Newest</option>
+                    <option value="status">Sort: Errors First</option>
+                    <option value="name">Sort: Name (A–Z)</option>
+                    <option value="bandwidth">Sort: Bandwidth</option>
+                  </select>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-lg overflow-x-auto max-w-full" role="group" aria-label="Filter by stream status">
+                    {filterTabs.map((tab) => {
+                      const active = statusFilter === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setStatusFilter(tab.id)}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                            active
+                              ? 'bg-white text-slate-900 shadow-sm'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
 
-              <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-lg overflow-x-auto max-w-full" role="group" aria-label="Filter by stream status">
-                {filterTabs.map((tab) => {
-                  const active = statusFilter === tab.id;
-                  return (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setStatusFilter(tab.id)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                        active
-                          ? 'bg-white text-slate-900 shadow-sm'
-                          : 'text-slate-600 hover:text-slate-900'
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  );
-                })}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={streams.length === 0 || bulkBusy}
+                    onClick={() => setBulkConfirm('stop-all')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    <Square className="h-3.5 w-3.5" />
+                    Stop All
+                  </button>
+                  <button
+                    type="button"
+                    disabled={streams.length === 0 || bulkBusy}
+                    onClick={() => setBulkConfirm('restart-all')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Restart All
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleExportJson()}
+                    disabled={streams.length === 0}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Export JSON
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => importInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 whitespace-nowrap"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    Import JSON
+                  </button>
+                  <input
+                    ref={importInputRef}
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={(e) => void handleImportJsonFile(e)}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setSessionsModalOpen(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 whitespace-nowrap shrink-0"
+                  >
+                    <Cpu className="h-3.5 w-3.5" />
+                    FFmpeg Sessions
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -633,6 +833,12 @@ export default function App() {
                           stream.status === 'starting' ||
                           stream.status === 'reconnecting';
                         const rowBusy = Boolean(busyIds[stream.id]);
+                        const rowProbing = Boolean(probingIds[stream.id]);
+                        const probeFpsLabel = formatProbeFps(stream.last_probe_fps);
+                        const probeResLabel =
+                          stream.last_probe_width && stream.last_probe_height
+                            ? `${stream.last_probe_width}x${stream.last_probe_height}${probeFpsLabel ? ` · ${probeFpsLabel}` : ''}`
+                            : probeFpsLabel;
 
                         return (
                           <tr key={stream.id} className="hover:bg-slate-50/80 transition-colors">
@@ -640,6 +846,16 @@ export default function App() {
                               <div className="font-medium text-slate-900 whitespace-nowrap truncate max-w-[170px]" title={stream.name}>
                                 {stream.name}
                               </div>
+                              {probeResLabel && (
+                                <div className="text-[11px] font-mono text-slate-500 mt-0.5 tabular-nums">
+                                  {probeResLabel}
+                                </div>
+                              )}
+                              {stream.needs_stream_key && (
+                                <div className="text-[11px] text-amber-700 mt-0.5">
+                                  Stream Key belum diisi (Edit)
+                                </div>
+                              )}
                               {stream.last_error && (
                                 <div
                                   className="text-xs text-red-600 mt-0.5 max-w-[170px] truncate"
@@ -652,19 +868,19 @@ export default function App() {
 
                             <td className="py-3.5 px-3">
                               <span
-                                className="font-mono text-xs text-slate-700 block max-w-[145px] truncate"
-                                title={stream.rtsp_url}
+                                className="font-mono text-xs text-slate-700 block max-w-[155px] truncate"
+                                title={stream.rtsp_url_masked}
                               >
-                                {truncateMiddle(stream.rtsp_url, 24)}
+                                {truncateMiddle(stream.rtsp_url_masked, 26)}
                               </span>
                             </td>
 
                             <td className="py-3.5 px-3">
                               <span
-                                className="font-mono text-xs text-slate-700 block max-w-[145px] truncate"
-                                title={stream.rtmp_url}
+                                className="font-mono text-xs text-slate-700 block max-w-[170px] truncate"
+                                title={stream.rtmp_url_masked}
                               >
-                                {maskRtmpUrl(stream.rtmp_url)}
+                                {truncateMiddle(stream.rtmp_url_masked, 32)}
                               </span>
                             </td>
 
@@ -720,7 +936,7 @@ export default function App() {
                                   className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap"
                                 >
                                   <Activity className="h-3.5 w-3.5" />
-                                  Probe
+                                  {rowProbing ? 'Probing...' : 'Probe'}
                                 </button>
 
                                 <button
@@ -800,6 +1016,61 @@ export default function App() {
         onCancel={() => setDeletingStream(null)}
         onConfirm={() => void handleConfirmDelete()}
       />
+
+      <SessionsModal
+        open={sessionsModalOpen}
+        onClose={() => setSessionsModalOpen(false)}
+        onUnauthorized={() => setAuthenticated(false)}
+        onCleaned={(message) => showToast('success', message)}
+      />
+
+      {bulkConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bulk-confirm-title"
+        >
+          <div className="w-full max-w-md bg-white border border-slate-200 rounded-lg shadow-xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-200">
+              <h2 id="bulk-confirm-title" className="text-base font-semibold text-slate-900">
+                {bulkConfirm === 'stop-all' ? 'Stop All Active Streams?' : 'Restart All Enabled Streams?'}
+              </h2>
+            </div>
+            <div className="p-6 space-y-4">
+              <p className="text-sm text-slate-600">
+                {bulkConfirm === 'stop-all'
+                  ? 'Semua proses FFmpeg aktif akan dihentikan paksa secara bersih (SIGTERM → SIGKILL 5s) dan ditandai berhenti.'
+                  : 'Semua stream aktif akan dihentikan sementara lalu seluruh stream berstatus enabled=1 akan dijalankan ulang dengan jeda 500ms.'}
+              </p>
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  disabled={bulkBusy}
+                  onClick={() => setBulkConfirm(null)}
+                  className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={bulkBusy}
+                  onClick={() => void handleBulkAction()}
+                  className={`px-4 py-2 text-sm font-medium text-white rounded-md disabled:opacity-50 ${
+                    bulkConfirm === 'stop-all' ? 'bg-red-700 hover:bg-red-800' : 'bg-slate-900 hover:bg-slate-800'
+                  }`}
+                >
+                  {bulkBusy
+                    ? 'Processing...'
+                    : bulkConfirm === 'stop-all'
+                      ? 'Confirm Stop All'
+                      : 'Confirm Restart All'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

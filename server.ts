@@ -1,15 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
 import {
   createApiAuthMiddleware,
   extractAllSessionTokens,
+  extractClientIp,
   formatSessionCookie,
+  LoginRateLimiter,
   resolveValidSessionToken,
   SESSION_TTL_MS,
   SessionStore,
   verifyCredentials,
+  waitMinDelay,
 } from './server/auth';
 import { loadConfig } from './server/config';
 import { StreamDatabase } from './server/db';
@@ -21,14 +23,25 @@ async function main() {
   const db = new StreamDatabase(config.dbPath);
   const manager = new StreamManager(db, config);
   const sessions = new SessionStore();
+  const loginLimiter = new LoginRateLimiter();
 
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 1);
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+  });
   app.use(express.json({ limit: '256kb' }));
 
-  app.get('/healthz', (_req, res) => {
-    res.json({ ok: true });
+  app.get(['/health', '/healthz'], (_req, res) => {
+    try {
+      db.ping();
+      res.json({ ok: true });
+    } catch {
+      res.status(503).json({ ok: false, error: 'Database unavailable' });
+    }
   });
 
   // Lightweight non-/api session check so login page loads with zero 401 console errors
@@ -41,15 +54,30 @@ async function main() {
     }
   });
 
-  app.post('/api/login', (req, res) => {
+  app.post('/api/login', async (req, res) => {
+    const startedAt = Date.now();
+    const clientIp = extractClientIp(req);
+    const lockState = loginLimiter.checkLockout(clientIp, startedAt);
+    if (lockState.locked) {
+      res.status(429).json({
+        error: `Terlalu banyak percobaan. Coba lagi dalam ${lockState.retryAfterMinutes} menit.`,
+      });
+      return;
+    }
+
     const username = typeof req.body?.username === 'string' ? req.body.username : '';
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    const valid = verifyCredentials(username, password);
 
-    if (!verifyCredentials(username, password)) {
+    await waitMinDelay(startedAt);
+
+    if (!valid) {
+      loginLimiter.recordFailure(clientIp);
       res.status(401).json({ error: 'Username atau password salah' });
       return;
     }
 
+    loginLimiter.recordSuccess(clientIp);
     const token = sessions.createSession();
     res.setHeader(
       'Set-Cookie',
@@ -81,6 +109,7 @@ async function main() {
 
   const isProd = process.env.NODE_ENV === 'production';
   if (!isProd) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -110,6 +139,7 @@ async function main() {
     console.log(
       `StreamBridge (${isProd ? 'production' : 'development'}) listening on http://0.0.0.0:${config.port}`,
     );
+    void manager.autoStartOnBoot(500);
   });
 
   let shuttingDown = false;

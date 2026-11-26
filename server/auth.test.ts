@@ -5,6 +5,9 @@ import {
   extractBearerToken,
   extractSessionToken,
   formatSessionCookie,
+  LOGIN_LOCKOUT_MS,
+  LOGIN_MAX_FAILURES,
+  LoginRateLimiter,
   parseCookieHeader,
   resolveValidSessionToken,
   SESSION_TTL_MS,
@@ -12,12 +15,38 @@ import {
   verifyCredentials,
 } from './auth';
 
-test('verifyCredentials accepts exact admin credentials and rejects others', () => {
-  assert.equal(verifyCredentials('admin', 'smkbisa'), true);
+test('verifyCredentials accepts exact admin/smkbisa!!*& credentials and rejects others', () => {
+  assert.equal(verifyCredentials('admin', 'smkbisa!!*&'), true);
+  assert.equal(verifyCredentials('admin', 'smkbisa'), false);
   assert.equal(verifyCredentials('admin', 'smk bisa'), false);
-  assert.equal(verifyCredentials('admin', 'smkbisa!!*&'), false);
   assert.equal(verifyCredentials('admin', 'wrong'), false);
-  assert.equal(verifyCredentials('root', 'smkbisa'), false);
+  assert.equal(verifyCredentials('root', 'smkbisa!!*&'), false);
+});
+
+test('LoginRateLimiter locks IP for 15 minutes after 5 failed attempts in 5 minutes', () => {
+  const limiter = new LoginRateLimiter();
+  const ip = '203.0.113.10';
+  const t0 = 10_000_000;
+
+  for (let i = 1; i < LOGIN_MAX_FAILURES; i += 1) {
+    const res = limiter.recordFailure(ip, t0 + i * 1000);
+    assert.equal(res.lockedUntil, 0);
+    assert.equal(limiter.checkLockout(ip, t0 + i * 1000).locked, false);
+  }
+
+  const fifth = limiter.recordFailure(ip, t0 + 5000);
+  assert.ok(fifth.lockedUntil > t0 + 5000);
+
+  const checkLocked = limiter.checkLockout(ip, t0 + 6000);
+  assert.equal(checkLocked.locked, true);
+  assert.equal(checkLocked.retryAfterMinutes, 15);
+
+  const checkUnlocked = limiter.checkLockout(ip, t0 + 5000 + LOGIN_LOCKOUT_MS + 1);
+  assert.equal(checkUnlocked.locked, false);
+
+  limiter.recordFailure(ip, t0 + 2_000_000);
+  limiter.recordSuccess(ip);
+  assert.equal(limiter.checkLockout(ip, t0 + 2_000_100).locked, false);
 });
 
 test('SessionStore creates, validates, expires after 24h, and deletes tokens', () => {
